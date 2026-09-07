@@ -148,9 +148,14 @@
     padding:12px 16px; border-bottom:1px solid var(--border);
     font-size:12.5px; font-weight:600; color:var(--ink-soft);
   }
-  .ledger-row{ display:grid; grid-template-columns:1fr 70px 110px 26px; gap:8px; align-items:center; padding:9px 16px; }
+  .ledger-row{ padding:9px 16px; }
+  .ledger-row-main{ display:grid; grid-template-columns:1fr 70px 110px 26px; gap:8px; align-items:center; }
   .ledger-row + .ledger-row{ border-top:1px solid var(--border); }
-  .ledger-row.total{ background:#FAFAF8; font-weight:700; }
+  .product-tag{
+    margin-top:6px; font-size:11px; color:var(--ink-soft); background:var(--track);
+    border:none; border-radius:100px; padding:3px 10px; font-family:inherit; cursor:pointer;
+  }
+  .ledger-row.total{ display:grid; grid-template-columns:1fr 70px 110px 26px; gap:8px; align-items:center; background:#FAFAF8; font-weight:700; }
   .ledger-row input{
     border:none; background:transparent; font-family:inherit; color:var(--ink);
     font-size:13px; padding:4px 2px; width:100%; border-radius:6px;
@@ -173,10 +178,15 @@
   .add-row:hover{ background:#FAFAF8; color:var(--ink); }
 
   .net-hero{ background:var(--dark); border-radius:14px; padding:20px 20px 18px; margin-bottom:14px; }
+  .net-hero.light{ background:var(--surface); border:1px solid var(--border); }
   .net-label{ font-size:12px; color:#A9A9A6; margin-bottom:6px; }
+  .net-hero.light .net-label{ color:var(--ink-soft); }
   .net-value{ font-size:32px; font-weight:700; color:#fff; font-variant-numeric:tabular-nums; letter-spacing:-0.01em; }
+  .net-hero.light .net-value{ color:var(--ink); }
   .net-value.neg{ color:#FF8A80; }
+  .net-hero.light .net-value.neg{ color:var(--neg); }
   .net-sub{ font-size:11.5px; color:#7d7d7a; margin-top:5px; }
+  .net-hero.light .net-sub{ color:var(--ink-faint); }
 
   .csv-btn{
     display:inline-flex; align-items:center; gap:6px;
@@ -189,7 +199,7 @@
 
   @media (max-width:380px){
     .stat-grid{ grid-template-columns:1fr; }
-    .ledger-row{ grid-template-columns:1fr 55px 90px 24px; }
+    .ledger-row-main, .ledger-row.total{ grid-template-columns:1fr 55px 90px 24px; }
   }
 </style>
 </head>
@@ -301,8 +311,23 @@
         </button>
       </div>
 
+      <div class="tab-row" id="ledgerTabRow"></div>
+      <h2 id="ledgerScopeHeading" style="font-size:16px; font-weight:700; margin:0 0 4px;"></h2>
+      <div class="section-note" id="ledgerScopeNote" style="margin:0 2px 14px;"></div>
+
       <div class="net-hero">
-        <div class="net-label">純利益</div>
+        <div class="net-label" id="lifetimeLabel">累計利益(発売開始〜現在)</div>
+        <div class="net-value" id="lifetimeValue">—</div>
+        <div class="net-sub" id="lifetimeSub"></div>
+      </div>
+
+      <div class="section-row">
+        <div class="section-label">今月の状況</div>
+        <div class="section-note">9/1〜9/4は1650円、9/5以降は990円で計算</div>
+      </div>
+
+      <div class="net-hero light">
+        <div class="net-label" id="netLabel">純利益(今月)</div>
         <div class="net-value" id="netValue">—</div>
         <div class="net-sub" id="netSub"></div>
       </div>
@@ -321,7 +346,7 @@
     </div>
 
     <div class="note">
-      毎日のCSVアップロードを前提に、「直近7日間」の窓データが重なる分を調整しながら月累計を推定する方式にしました(経過日数分だけを新規増分として加算)。日次の推移・着地予測もこの推定累計をもとに計算しています。先月比は10月以降、月をまたいだ時点で表示されます。社員販売の扱いは追ってご相談のうえ反映します。
+      毎日「今月」(月初からの累計)期間でダウンロードしたCSVをそのままアップロードする運用です。アップロードした値をそのまま真の月累計として扱うので、推定計算は行っていません。日次の推移・着地予測もこの累計をもとに計算しています。先月比は10月以降、月をまたいだ時点で表示されます。
     </div>
   </div>
 
@@ -334,7 +359,7 @@
 
   let TODAY_DAY = 5;
   const DAYS_IN_MONTH = 30;
-  let uploadHistory = []; // [{day, units:[serum,lotion,cleansing,cream], visit, raw, bundle}] 各アップロード時点の「直近7日間」の値(生データ)
+  let uploadHistory = []; // [{day, units:[serum,lotion,cleansing,cream], visit, raw, bundle}] 各アップロード時点の「今月累計」の値
   function dayProgressPct(){ return (TODAY_DAY / DAYS_IN_MONTH) * 100; }
 
   // 初期値(Supabaseから読み込むまでの仮の値。読み込み後に上書きされます)
@@ -349,7 +374,18 @@
   let visitTotal = 0;    // 来店数合計
   let rawTotal = 0;      // 購入件数合計(CSVの「合計」列。本数ではなく件数ベース)
 
+  // 9/1〜9/4は価格改定前(美容液・化粧水=1650円)。この期間の実本数・実売上を固定値として持ち、
+  // 9月の月累計本数からこの分を差し引いた残りを990円で計算する(9/5以降の価格改定を正しく反映するため)
+  const SEPT_EARLY_UNITS   = [57, 40, 0, 0];    // 美容液, 化粧水, クレンジング, クリーム
+  const SEPT_EARLY_REVENUE = [80050, 52000, 0, 0];
+  function storeRevenue(i){
+    const p = PRODUCTS[i];
+    const remaining = Math.max(0, p.units - SEPT_EARLY_UNITS[i]);
+    return SEPT_EARLY_REVENUE[i] + remaining * p.price;
+  }
+
   const COLS = {
+    store: '店舗',
     visit: '来店数',
     serumRepeat: 'セラム再購入', serumFirst: 'セラム初回', serumCampaign: '【キャンペーン】ガラクナイアシンセラム',
     lotionRepeat: '化粧水再購入', lotionFirst: '化粧水初回', lotionCampaign: '【キャンペーン】W発酵化粧水',
@@ -402,38 +438,22 @@
       const combined = p.units + empUnits;
       totalUnits += combined;
       totalTarget += p.target;
-      autoRevenue += p.units * p.price + empUnits * empPrice;
+      autoRevenue += storeRevenue(i) + empUnits * empPrice;
       autoCost += combined * p.cost;
     });
     overallPct = (totalUnits / totalTarget) * 100;
   }
 
-  // ---- 7日間ローリングCSVから真の月累計を推定する ----
-  // 直近7日間の窓データが重なりながら毎日アップロードされる前提で、
-  // 新しい窓のうち「経過日数分」だけを新規増分として加算していく近似方式。
+  // ---- 「今月」期間でダウンロードしたCSVの累計を時系列で並べる ----
+  // 「今月」(月初からの累計)でCSVをダウンロードしてもらう運用に変更したため、
+  // 各アップロードの値はそのまま真の月累計として扱う(推定計算は不要)
   function computeCumulativeSeries(){
     const sorted = [...uploadHistory].sort((a,b)=>a.day-b.day);
-    let cum = [0,0,0,0];
-    let prevDay = null;
     const days = [], perProduct = [[],[],[],[]], total = [];
     sorted.forEach(entry => {
-      const day = entry.day;
-      if (prevDay === null){
-        cum = entry.units.slice();
-      } else {
-        const gap = day - prevDay;
-        if (gap <= 0){ /* 重複日付はスキップ */ return; }
-        if (gap >= 7){
-          cum = cum.map((c,i) => c + entry.units[i]);
-        } else {
-          const frac = gap / 7;
-          cum = cum.map((c,i) => c + entry.units[i] * frac);
-        }
-      }
-      days.push(day);
-      cum.forEach((c,i) => perProduct[i].push(c));
-      total.push(cum.reduce((a,b)=>a+b,0));
-      prevDay = day;
+      days.push(entry.day);
+      entry.units.forEach((v,i) => perProduct[i].push(v));
+      total.push(entry.units.reduce((a,b)=>a+b,0));
     });
     return { days, perProduct, total };
   }
@@ -609,7 +629,7 @@
       skipEmptyLines: true,
       encoding: 'Shift_JIS',
       complete: (results) => {
-        const rows = results.data.slice(1); // 先頭行はヘッダーなので除く
+        const rows = results.data.slice(1).filter(r => r[3] && r[3].trim() !== ''); // ヘッダー行と、購入者名が空の合計行を除く
         const n2 = v => { const x = parseInt(v,10); return isNaN(x) ? 0 : x; };
         let serum=0, lotion=0, cleansing=0, cream=0;
         rows.forEach(r => {
@@ -640,7 +660,7 @@
       const empPrice = Number(employeeData[i].price)||0;
       const combined = p.units + empUnits;
       const pct = (combined / p.target) * 100;
-      const revenue = p.units * p.price + empUnits * empPrice;
+      const revenue = storeRevenue(i) + empUnits * empPrice;
       const profitTotal = revenue - combined * p.cost;
       const onPace = isOnPace(pct);
       const row = document.createElement('div');
@@ -704,7 +724,7 @@
       const empPrice = Number(employeeData[idx].price)||0;
       const combined = p.units + empUnits;
       units = combined; target = p.target; pct = (combined / p.target) * 100;
-      revenue = p.units * p.price + empUnits * empPrice;
+      revenue = storeRevenue(idx) + empUnits * empPrice;
       profit = revenue - combined * p.cost;
       document.getElementById('unitsLabel').textContent = '販売本数(' + p.name + '・店舗+社員)';
     }
@@ -726,23 +746,23 @@
       const { data, error } = await db.from('n3_ledger_items').select('*').eq('month', MONTH).order('sort_order');
       if (error) throw error;
       if (!data || data.length === 0){
-        // 初回のみ、サンプルの項目をSupabaseに登録しておく
+        // 初回のみ、サンプルの項目をSupabaseに登録しておく(全体・共通扱い)
         const seedRows = [
-          ...DEFAULT_LEDGER.revenueItems.map((it,i) => ({ month: MONTH, item_type: 'revenue', label: it.label, units: it.units, amount: it.amount, sort_order: i })),
-          ...DEFAULT_LEDGER.costItems.map((it,i) => ({ month: MONTH, item_type: 'cost', label: it.label, units: null, amount: it.amount, sort_order: i })),
+          ...DEFAULT_LEDGER.revenueItems.map((it,i) => ({ month: MONTH, item_type: 'revenue', label: it.label, units: it.units, amount: it.amount, sort_order: i, product: 'all' })),
+          ...DEFAULT_LEDGER.costItems.map((it,i) => ({ month: MONTH, item_type: 'cost', label: it.label, units: null, amount: it.amount, sort_order: i, product: 'all' })),
         ];
         const { data: inserted, error: insErr } = await db.from('n3_ledger_items').insert(seedRows).select();
         if (insErr) throw insErr;
         ledger = { revenueItems: [], costItems: [] };
         (inserted||[]).forEach(row => {
-          const item = { id: row.id, label: row.label, units: row.units||0, amount: Number(row.amount)||0 };
+          const item = { id: row.id, label: row.label, units: row.units||0, amount: Number(row.amount)||0, product: row.product||'all' };
           if (row.item_type === 'revenue') ledger.revenueItems.push(item);
           else ledger.costItems.push(item);
         });
       } else {
         ledger = { revenueItems: [], costItems: [] };
         data.forEach(row => {
-          const item = { id: row.id, label: row.label, units: row.units||0, amount: Number(row.amount)||0 };
+          const item = { id: row.id, label: row.label, units: row.units||0, amount: Number(row.amount)||0, product: row.product||'all' };
           if (row.item_type === 'revenue') ledger.revenueItems.push(item);
           else ledger.costItems.push(item);
         });
@@ -751,21 +771,21 @@
     renderLedger();
   }
 
-  async function updateLedgerItem(item, type){
+  async function updateLedgerItem(item){
     try{
       await db.from('n3_ledger_items').update({
-        label: item.label, units: item.units, amount: item.amount
+        label: item.label, units: item.units, amount: item.amount, product: item.product
       }).eq('id', item.id);
     }catch(e){ console.error('月次収支の保存に失敗しました', e); }
   }
 
-  async function insertLedgerItem(type, sortOrder){
+  async function insertLedgerItem(type, sortOrder, product){
     try{
       const { data, error } = await db.from('n3_ledger_items').insert({
-        month: MONTH, item_type: type, label: '', units: type==='revenue' ? 0 : null, amount: 0, sort_order: sortOrder
+        month: MONTH, item_type: type, label: '', units: type==='revenue' ? 0 : null, amount: 0, sort_order: sortOrder, product
       }).select().single();
       if (error) throw error;
-      return { id: data.id, label: '', units: 0, amount: 0 };
+      return { id: data.id, label: '', units: 0, amount: 0, product };
     }catch(e){ console.error('項目の追加に失敗しました', e); return null; }
   }
 
@@ -774,58 +794,164 @@
     catch(e){ console.error('項目の削除に失敗しました', e); }
   }
 
-  function computeTotals(){
-    const manualRevenue = ledger.revenueItems.reduce((s,i)=>s+(Number(i.amount)||0),0);
-    const manualCost = ledger.costItems.reduce((s,i)=>s+(Number(i.amount)||0),0);
-    const revenueTotal = autoRevenue + manualRevenue;
-    const costTotal = autoCost + manualCost;
+  // ---- 月次収支の表示範囲(全体 / 商品別) ----
+  let currentLedgerView = 'all';
+  const PRODUCT_OPTIONS = ['all', ...PRODUCTS.map(p=>p.name)];
+
+  function autoFigures(view){
+    if (view === 'all') return { revenue: autoRevenue, cost: autoCost, units: totalUnits, label: '全体・店舗+社員' };
+    const idx = PRODUCTS.findIndex(p => p.name === view);
+    const p = PRODUCTS[idx];
+    const empUnits = Number(employeeData[idx].units)||0;
+    const empPrice = Number(employeeData[idx].price)||0;
+    const combined = p.units + empUnits;
+    return { revenue: storeRevenue(idx) + empUnits*empPrice, cost: combined*p.cost, units: combined, label: view + '・店舗+社員' };
+  }
+
+  function computeTotals(view){
+    view = view || currentLedgerView;
+    const revItems = view === 'all' ? ledger.revenueItems : ledger.revenueItems.filter(i => i.product === view);
+    const costItems = view === 'all' ? ledger.costItems : ledger.costItems.filter(i => i.product === view);
+    const manualRevenue = revItems.reduce((s,i)=>s+(Number(i.amount)||0),0);
+    const manualCost = costItems.reduce((s,i)=>s+(Number(i.amount)||0),0);
+    const auto = autoFigures(view);
+    const revenueTotal = auto.revenue + manualRevenue;
+    const costTotal = auto.cost + manualCost;
     const net = revenueTotal - costTotal;
-    return { revenueTotal, costTotal, net };
+    return { revenueTotal, costTotal, net, auto };
   }
 
   function refreshTotals(){
-    const { revenueTotal, costTotal, net } = computeTotals();
+    const { revenueTotal, costTotal, net } = computeTotals(currentLedgerView);
     document.getElementById('revenueTotalLabel').textContent = yen(revenueTotal);
     document.getElementById('costTotalLabel').textContent = yen(costTotal);
     const netEl = document.getElementById('netValue');
     netEl.textContent = yen(net);
     netEl.classList.toggle('neg', net < 0);
     document.getElementById('netSub').textContent = '収入合計 ' + yen(revenueTotal) + ' − 支出合計 ' + yen(costTotal);
+    document.getElementById('netLabel').textContent = currentLedgerView === 'all' ? '純利益(今月・全体)' : '純利益(今月・' + currentLedgerView + ')';
+    document.getElementById('ledgerScopeHeading').textContent = currentLedgerView === 'all' ? 'N.THREE 全体' : currentLedgerView;
+    document.getElementById('ledgerScopeNote').textContent = currentLedgerView === 'all'
+      ? '全商品+共通費をまとめた会社全体の収支です。'
+      : '「' + currentLedgerView + '」に紐づく項目だけを表示しています。共通費(全体タグ)は「全体」タブでのみ表示されます。';
+    renderLifetimeProfit();
+  }
+
+  // ---- 累計利益(発売開始〜現在。7月・8月の実績+今月の分) ----
+  let productBaseline = [
+    { units: 0, revenue: 0, cost: 0 },
+    { units: 0, revenue: 0, cost: 0 },
+    { units: 0, revenue: 0, cost: 0 },
+    { units: 0, revenue: 0, cost: 0 },
+  ];
+
+  async function loadBaseline(){
+    try{
+      const { data, error } = await db.from('n3_product_baseline').select('*');
+      if (error) throw error;
+      (data||[]).forEach(row => {
+        const idx = PRODUCTS.findIndex(p => p.name === row.product);
+        if (idx >= 0) productBaseline[idx] = { units: row.pre_units, revenue: Number(row.pre_revenue), cost: Number(row.pre_cost) };
+      });
+    }catch(e){ console.error('累計利益ベースラインの読み込みに失敗しました', e); }
+  }
+
+  function computeLifetime(view){
+    if (view === 'all'){
+      let revenue = 0, cost = 0, units = 0;
+      PRODUCTS.forEach((p,i) => {
+        const empUnits = Number(employeeData[i].units)||0;
+        const empPrice = Number(employeeData[i].price)||0;
+        const combined = p.units + empUnits;
+        const base = productBaseline[i];
+        revenue += base.revenue + storeRevenue(i) + empUnits*empPrice;
+        cost += base.cost + combined*p.cost;
+        units += base.units + combined;
+      });
+      return { revenue, cost, profit: revenue-cost, units };
+    }
+    const idx = PRODUCTS.findIndex(p => p.name === view);
+    const p = PRODUCTS[idx];
+    const empUnits = Number(employeeData[idx].units)||0;
+    const empPrice = Number(employeeData[idx].price)||0;
+    const combined = p.units + empUnits;
+    const base = productBaseline[idx];
+    const revenue = base.revenue + storeRevenue(idx) + empUnits*empPrice;
+    const cost = base.cost + combined*p.cost;
+    return { revenue, cost, profit: revenue-cost, units: base.units + combined };
+  }
+
+  function renderLifetimeProfit(){
+    const lt = computeLifetime(currentLedgerView);
+    const el = document.getElementById('lifetimeValue');
+    el.textContent = yen(lt.profit);
+    el.classList.toggle('neg', lt.profit < 0);
+    document.getElementById('lifetimeLabel').textContent = currentLedgerView === 'all'
+      ? '累計利益(発売開始〜現在・全体)' : '累計利益(発売開始〜現在・' + currentLedgerView + ')';
+    document.getElementById('lifetimeSub').textContent =
+      '累計本数 ' + num(lt.units) + '本 ・ 累計売上 ' + yen(lt.revenue) + ' − 累計原価 ' + yen(lt.cost);
+  }
+
+  function renderLedgerTabs(){
+    const tabRow = document.getElementById('ledgerTabRow');
+    tabRow.innerHTML = '';
+    PRODUCT_OPTIONS.forEach(v => {
+      const tab = document.createElement('div');
+      tab.className = 'tab' + (v === currentLedgerView ? ' active' : '');
+      tab.textContent = v === 'all' ? '全体' : v;
+      tab.addEventListener('click', () => { currentLedgerView = v; renderLedgerTabs(); renderLedger(); });
+      tabRow.appendChild(tab);
+    });
+  }
+
+  function productSelectHtml(selected){
+    return `<select class="product-tag">` +
+      PRODUCT_OPTIONS.map(v => `<option value="${v}" ${v===selected?'selected':''}>${v==='all'?'全体(共通)':v}</option>`).join('') +
+      `</select>`;
   }
 
   function renderLedger(){
+    const auto = autoFigures(currentLedgerView);
+
     const revenueListEl = document.getElementById('revenueList');
     revenueListEl.innerHTML = '';
 
     const autoRevRow = document.createElement('div');
     autoRevRow.className = 'ledger-row total';
     autoRevRow.innerHTML = `
-      <div class="locked">商品売上(店舗+社員 自動計算)</div>
-      <div class="locked" style="text-align:right;">${num(totalUnits)}</div>
-      <div class="locked-amt">${yen(autoRevenue)}</div>
+      <div class="locked">商品売上(${auto.label} 自動計算)</div>
+      <div class="locked" style="text-align:right;">${num(auto.units)}</div>
+      <div class="locked-amt">${yen(auto.revenue)}</div>
       <div></div>
     `;
     revenueListEl.appendChild(autoRevRow);
 
-    ledger.revenueItems.forEach((item) => {
+    const visibleRevItems = currentLedgerView === 'all' ? ledger.revenueItems : ledger.revenueItems.filter(i => i.product === currentLedgerView);
+    visibleRevItems.forEach((item) => {
       const row = document.createElement('div');
       row.className = 'ledger-row';
       row.innerHTML = `
-        <input type="text" class="label" value="${item.label}" placeholder="項目名">
-        <input type="number" class="units" value="${item.units || ''}" placeholder="本数">
-        <input type="number" class="amount" value="${item.amount || ''}" placeholder="0">
-        <button class="del-btn" title="削除">×</button>
+        <div class="ledger-row-main">
+          <input type="text" class="label" value="${item.label}" placeholder="項目名">
+          <input type="number" class="units" value="${item.units || ''}" placeholder="本数">
+          <input type="number" class="amount" value="${item.amount || ''}" placeholder="0">
+          <button class="del-btn" title="削除">×</button>
+        </div>
+        ${productSelectHtml(item.product)}
       `;
       const [labelInput, unitsInput, amountInput] = row.querySelectorAll('input');
       labelInput.addEventListener('input', e => { item.label = e.target.value; });
-      labelInput.addEventListener('change', () => updateLedgerItem(item, 'revenue'));
+      labelInput.addEventListener('change', () => updateLedgerItem(item));
       unitsInput.addEventListener('input', e => { item.units = Number(e.target.value)||0; });
-      unitsInput.addEventListener('change', () => updateLedgerItem(item, 'revenue'));
+      unitsInput.addEventListener('change', () => updateLedgerItem(item));
       amountInput.addEventListener('input', e => { item.amount = Number(e.target.value)||0; refreshTotals(); });
-      amountInput.addEventListener('change', () => updateLedgerItem(item, 'revenue'));
+      amountInput.addEventListener('change', () => updateLedgerItem(item));
+      row.querySelector('.product-tag').addEventListener('change', e => {
+        item.product = e.target.value; updateLedgerItem(item); renderLedger();
+      });
       row.querySelector('.del-btn').addEventListener('click', async () => {
         ledger.revenueItems = ledger.revenueItems.filter(i => i !== item);
-        renderLedger(); refreshTotals();
+        renderLedger();
         await deleteLedgerItem(item.id);
       });
       revenueListEl.appendChild(row);
@@ -837,31 +963,38 @@
     const autoCostRow = document.createElement('div');
     autoCostRow.className = 'ledger-row total';
     autoCostRow.innerHTML = `
-      <div class="locked">仕入れ原価(店舗+社員 自動計算)</div>
+      <div class="locked">仕入れ原価(${auto.label} 自動計算)</div>
       <div></div>
-      <div class="locked-amt">${yen(autoCost)}</div>
+      <div class="locked-amt">${yen(auto.cost)}</div>
       <div></div>
     `;
     costListEl.appendChild(autoCostRow);
 
-    ledger.costItems.forEach((item) => {
+    const visibleCostItems = currentLedgerView === 'all' ? ledger.costItems : ledger.costItems.filter(i => i.product === currentLedgerView);
+    visibleCostItems.forEach((item) => {
       const row = document.createElement('div');
       row.className = 'ledger-row';
       row.innerHTML = `
-        <input type="text" class="label" value="${item.label}" placeholder="項目名">
-        <div></div>
-        <input type="number" class="amount" value="${item.amount || ''}" placeholder="0">
-        <button class="del-btn" title="削除">×</button>
+        <div class="ledger-row-main">
+          <input type="text" class="label" value="${item.label}" placeholder="項目名">
+          <div></div>
+          <input type="number" class="amount" value="${item.amount || ''}" placeholder="0">
+          <button class="del-btn" title="削除">×</button>
+        </div>
+        ${productSelectHtml(item.product)}
       `;
       const labelInput = row.querySelector('.label');
       const amountInput = row.querySelector('.amount');
       labelInput.addEventListener('input', e => { item.label = e.target.value; });
-      labelInput.addEventListener('change', () => updateLedgerItem(item, 'cost'));
+      labelInput.addEventListener('change', () => updateLedgerItem(item));
       amountInput.addEventListener('input', e => { item.amount = Number(e.target.value)||0; refreshTotals(); });
-      amountInput.addEventListener('change', () => updateLedgerItem(item, 'cost'));
+      amountInput.addEventListener('change', () => updateLedgerItem(item));
+      row.querySelector('.product-tag').addEventListener('change', e => {
+        item.product = e.target.value; updateLedgerItem(item); renderLedger();
+      });
       row.querySelector('.del-btn').addEventListener('click', async () => {
         ledger.costItems = ledger.costItems.filter(i => i !== item);
-        renderLedger(); refreshTotals();
+        renderLedger();
         await deleteLedgerItem(item.id);
       });
       costListEl.appendChild(row);
@@ -871,18 +1004,18 @@
   }
 
   document.getElementById('addRevenueRow').addEventListener('click', async () => {
-    const item = await insertLedgerItem('revenue', ledger.revenueItems.length);
+    const item = await insertLedgerItem('revenue', ledger.revenueItems.length, currentLedgerView);
     if (item){ ledger.revenueItems.push(item); renderLedger(); }
   });
   document.getElementById('addCostRow').addEventListener('click', async () => {
-    const item = await insertLedgerItem('cost', ledger.costItems.length);
+    const item = await insertLedgerItem('cost', ledger.costItems.length, currentLedgerView);
     if (item){ ledger.costItems.push(item); renderLedger(); }
   });
 
   document.getElementById('csvBtn').addEventListener('click', () => {
-    const { revenueTotal, costTotal, net } = computeTotals();
+    const { revenueTotal, costTotal, net } = computeTotals(currentLedgerView);
     let csv = '\uFEFF';
-    csv += 'N.THREE 2026年9月度\n\n';
+    csv += `N.THREE 2026年9月度(月次収支: ${currentLedgerView === 'all' ? '全体' : currentLedgerView})\n\n`;
     csv += '商品別内訳(店舗+社員 合算)\n';
     csv += '商品,店舗本数,社員本数,合計本数,目標,達成率,売上,粗利\n';
     PRODUCTS.forEach((p,i)=>{
@@ -890,7 +1023,7 @@
       const empPrice = Number(employeeData[i].price)||0;
       const combined = p.units + empUnits;
       const pct = (combined/p.target*100).toFixed(1);
-      const rev = p.units*p.price + empUnits*empPrice;
+      const rev = storeRevenue(i) + empUnits*empPrice;
       const prof = rev - combined*p.cost;
       csv += `${p.name},${p.units},${empUnits},${combined},${p.target},${pct}%,${rev},${prof}\n`;
     });
@@ -899,15 +1032,18 @@
     csv += '来店・販売率\n来店数,購入件数,販売率\n';
     csv += `${visitTotal},${rawTotal},${(visitTotal>0?(rawTotal/visitTotal*100):0).toFixed(2)}%\n\n`;
 
-    csv += '収入内訳\n項目,本数,金額\n';
-    csv += `商品売上(店舗+社員 自動計算),${totalUnits},${autoRevenue}\n`;
-    ledger.revenueItems.forEach(i=>{ csv += `${i.label},${i.units||0},${i.amount||0}\n`; });
-    csv += `収入合計,,${revenueTotal}\n\n`;
+    const revItemsOut = currentLedgerView === 'all' ? ledger.revenueItems : ledger.revenueItems.filter(i=>i.product===currentLedgerView);
+    const costItemsOut = currentLedgerView === 'all' ? ledger.costItems : ledger.costItems.filter(i=>i.product===currentLedgerView);
 
-    csv += '支出内訳\n項目,金額\n';
-    csv += `仕入れ原価(店舗+社員 自動計算),${autoCost}\n`;
-    ledger.costItems.forEach(i=>{ csv += `${i.label},${i.amount||0}\n`; });
-    csv += `支出合計,${costTotal}\n\n`;
+    csv += '収入内訳\n項目,対象商品,本数,金額\n';
+    csv += `商品売上(自動計算),${currentLedgerView==='all'?'全体':currentLedgerView},${totalUnits},${autoRevenue}\n`;
+    revItemsOut.forEach(i=>{ csv += `${i.label},${i.product==='all'?'全体(共通)':i.product},${i.units||0},${i.amount||0}\n`; });
+    csv += `収入合計,,,${revenueTotal}\n\n`;
+
+    csv += '支出内訳\n項目,対象商品,金額\n';
+    csv += `仕入れ原価(自動計算),${currentLedgerView==='all'?'全体':currentLedgerView},${autoCost}\n`;
+    costItemsOut.forEach(i=>{ csv += `${i.label},${i.product==='all'?'全体(共通)':i.product},${i.amount||0}\n`; });
+    csv += `支出合計,,${costTotal}\n\n`;
 
     csv += `純利益,${net}\n`;
 
@@ -931,6 +1067,8 @@
   }
 
   function applyParsedRows(rows, day){
+    // CSVの末尾にある「全店合計」行(店舗名が空欄)は除外する。含めると数字が丸ごと2倍になる。
+    rows = rows.filter(row => row[COLS.store] && row[COLS.store].trim() !== '');
     let serum=0, lotion=0, cleansing=0, cream=0, bundle=0, visit=0, raw=0;
     rows.forEach(row => {
       serum += n_(row[COLS.serumRepeat]) + n_(row[COLS.serumFirst]) + n_(row[COLS.serumCampaign]);
@@ -942,7 +1080,7 @@
       visit += n_(row[COLS.visit]);
       raw += n_(row[COLS.total]);
     });
-    // セット購入(美容液＆化粧水)は各1本ずつ加算した「直近7日間の窓」データとして履歴に保存
+    // セット購入(美容液＆化粧水)は各1本ずつ加算した「今月累計」として履歴に保存
     const windowUnits = [serum + bundle, lotion + bundle, cleansing, cream];
     uploadHistory = uploadHistory.filter(e => e.day !== day);
     uploadHistory.push({ day, units: windowUnits, visit, raw, bundle });
@@ -1067,6 +1205,7 @@
     uploadHistory = [];
     employeeData.forEach(e => e.units = 0);
     ledger = { revenueItems: [], costItems: [] };
+    currentLedgerView = 'all';
 
     recomputeProductTotals();
     renderProductList();
@@ -1075,6 +1214,7 @@
     renderHeaderLine();
     renderSalesRate();
     renderEmployee();
+    renderLedgerTabs();
     renderLedger();
     document.getElementById('monthlyCompareNote').textContent = '';
     document.getElementById('uploadStatus').textContent = '';
@@ -1092,6 +1232,8 @@
     renderSalesRate();
     await loadEmployee();
     renderEmployee();
+    await loadBaseline();
+    renderLedgerTabs();
     await loadLedger();
     await saveMonthlySnapshot();
     await renderMonthlyCompare();
