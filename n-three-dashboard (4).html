@@ -1,0 +1,1102 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>N.THREE | 売上・粗利ダッシュボード</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&display=swap');
+
+  :root{
+    --bg: #F5F5F3;
+    --surface: #FFFFFF;
+    --border: #E6E5E1;
+    --ink: #17171A;
+    --ink-soft: #8B8B86;
+    --ink-faint: #B4B3AD;
+    --track: #ECECE8;
+    --dark: #17171A;
+    --neg: #C23B32;
+  }
+
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:'Inter','Noto Sans JP',sans-serif;
+    -webkit-font-smoothing:antialiased;
+    min-height:100vh;
+  }
+
+  .app{
+    max-width:640px;
+    margin:0 auto;
+    padding:28px 18px 70px;
+  }
+
+  .headrow{
+    display:flex;
+    justify-content:space-between;
+    align-items:flex-start;
+    gap:12px;
+    margin-bottom:2px;
+  }
+  h1{ font-size:20px; font-weight:700; margin:0 0 4px; letter-spacing:-0.01em; }
+  .brand{ font-size:12.5px; font-weight:600; color:var(--ink-soft); letter-spacing:0.02em; margin-bottom:6px; }
+  .period-select{
+    display:flex; align-items:center; gap:6px;
+    background:var(--surface); border:1px solid var(--border);
+    border-radius:9px; padding:8px 12px; font-size:13px; white-space:nowrap;
+  }
+  .subline{ font-size:13px; color:var(--ink-soft); margin:0 0 20px; }
+  .demo-badge{
+    display:inline-block; font-size:10.5px; color:var(--ink-soft);
+    border:1px solid var(--border); border-radius:100px; padding:2px 9px; margin-left:6px;
+  }
+
+  .nav-tabs{
+    display:flex; gap:22px; border-bottom:1px solid var(--border);
+    margin:4px 0 20px; overflow-x:auto;
+  }
+  .nav-tab{
+    font-size:13.5px; font-weight:600; color:var(--ink-soft);
+    padding:0 0 10px; cursor:pointer; border-bottom:2px solid transparent;
+    margin-bottom:-1px; white-space:nowrap;
+  }
+  .nav-tab.active{ color:var(--ink); border-bottom-color:var(--dark); }
+  .panel.hidden{ display:none; }
+
+  .tab-row{
+    display:flex; gap:6px; overflow-x:auto; margin:2px 0 18px; padding-bottom:2px;
+    -ms-overflow-style:none; scrollbar-width:none;
+  }
+  .tab-row::-webkit-scrollbar{ display:none; }
+  .tab{
+    flex:0 0 auto; font-size:12.5px; font-weight:600; color:var(--ink-soft);
+    background:var(--surface); border:1px solid var(--border); border-radius:100px;
+    padding:7px 14px; cursor:pointer; white-space:nowrap;
+  }
+  .tab:hover{ background:#FAFAF8; }
+  .tab.active{ background:var(--dark); border-color:var(--dark); color:#fff; }
+
+  .product-row.active{ background:#FAFAF8; }
+
+  .stat-grid{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:26px; }
+  .stat-card{ background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:16px 16px 15px; }
+  .stat-card.dark{ background:var(--dark); border-color:var(--dark); }
+  .stat-label{ font-size:12px; color:var(--ink-soft); margin-bottom:8px; }
+  .stat-card.dark .stat-label{ color:#A9A9A6; }
+  .stat-value{ font-size:24px; font-weight:700; font-variant-numeric:tabular-nums; letter-spacing:-0.01em; }
+  .stat-card.dark .stat-value{ color:#FFFFFF; }
+  .stat-value.neg{ color:var(--neg); }
+  .stat-card.dark .stat-value.neg{ color:#FF8A80; }
+  .stat-value .unit{ font-size:13px; font-weight:500; color:var(--ink-soft); margin-left:2px; }
+  .stat-card.dark .stat-value .unit{ color:#8f8f8c; }
+  .stat-sub{ font-size:11.5px; color:var(--ink-faint); margin-top:6px; }
+  .stat-card.dark .stat-sub{ color:#7d7d7a; }
+
+  .section-row{ display:flex; justify-content:space-between; align-items:center; margin:34px 2px 10px; }
+  .section-label{ font-size:13.5px; font-weight:700; }
+  .section-note{ font-size:12px; color:var(--ink-faint); }
+
+  .product-list{ background:var(--surface); border:1px solid var(--border); border-radius:14px; overflow:hidden; }
+  .product-row{ padding:16px 18px; cursor:pointer; transition:background 0.12s; }
+  .product-row + .product-row{ border-top:1px solid var(--border); }
+  .product-row-top{ display:flex; justify-content:space-between; align-items:baseline; margin-bottom:9px; }
+  .product-name{ font-size:14.5px; font-weight:600; }
+  .product-units{ font-size:13px; color:var(--ink-soft); font-variant-numeric:tabular-nums; }
+  .product-progress-row{ display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+  .product-track{ flex:1; height:5px; background:var(--track); border-radius:100px; overflow:hidden; }
+  .product-fill{ height:100%; background:var(--dark); border-radius:100px; }
+  .product-pct{ font-size:12px; font-weight:600; font-variant-numeric:tabular-nums; width:32px; text-align:right; }
+  .product-meta{ display:flex; align-items:center; gap:10px 16px; flex-wrap:wrap; font-size:12.5px; color:var(--ink-soft); }
+  .product-meta b{ color:var(--ink); font-weight:600; font-variant-numeric:tabular-nums; }
+  .pace-dot{ display:inline-block; width:6px; height:6px; border-radius:50%; background:var(--dark); margin-right:5px; }
+  .pace-dot.behind{ background:transparent; border:1.4px solid var(--ink-faint); }
+
+  /* Ledger */
+  .trend-card{ background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:16px 16px 10px; margin-bottom:8px; }
+  .trend-legend{ display:flex; gap:16px; font-size:11.5px; color:var(--ink-soft); margin-top:6px; }
+  .trend-legend span{ display:inline-flex; align-items:center; gap:5px; }
+  .legend-dot{ width:8px; height:8px; border-radius:50%; display:inline-block; }
+  .legend-dot.actual{ background:var(--dark); }
+  .legend-dot.pace{ background:var(--ink-faint); }
+  .projection-line{ font-size:12.5px; color:var(--ink-soft); margin:2px 2px 16px; }
+  .projection-line b{ color:var(--ink); font-weight:700; }
+  .projection-line.behind b.delta{ color:var(--neg); }
+
+  .employee-row{ display:grid; grid-template-columns:1fr 64px 56px 1fr; gap:8px; align-items:center; padding:9px 16px; }
+  .employee-row + .employee-row{ border-top:1px solid var(--border); }
+  .employee-row.total{ background:#FAFAF8; font-weight:700; }
+  .employee-row input{
+    border:none; background:transparent; font-family:inherit; color:var(--ink);
+    font-size:13px; padding:4px 2px; width:100%; border-radius:6px; text-align:right;
+    font-variant-numeric:tabular-nums;
+  }
+  .employee-row input:focus{ outline:none; background:var(--track); }
+  .employee-row .name{ font-size:13.5px; font-weight:600; }
+  .employee-row .result{ font-size:12px; color:var(--ink-soft); text-align:right; }
+  .employee-row .result b{ color:var(--ink); font-weight:600; }
+  .employee-row .colhead{ font-size:10.5px; color:var(--ink-faint); text-align:right; }
+
+  .ledger-card{ background:var(--surface); border:1px solid var(--border); border-radius:14px; overflow:hidden; margin-bottom:14px; }
+  .ledger-head{
+    display:flex; justify-content:space-between; align-items:center;
+    padding:12px 16px; border-bottom:1px solid var(--border);
+    font-size:12.5px; font-weight:600; color:var(--ink-soft);
+  }
+  .ledger-row{ display:grid; grid-template-columns:1fr 70px 110px 26px; gap:8px; align-items:center; padding:9px 16px; }
+  .ledger-row + .ledger-row{ border-top:1px solid var(--border); }
+  .ledger-row.total{ background:#FAFAF8; font-weight:700; }
+  .ledger-row input{
+    border:none; background:transparent; font-family:inherit; color:var(--ink);
+    font-size:13px; padding:4px 2px; width:100%; border-radius:6px;
+  }
+  .ledger-row input:focus{ outline:none; background:var(--track); }
+  .ledger-row input.amount{ text-align:right; font-variant-numeric:tabular-nums; }
+  .ledger-row input.units{ text-align:right; font-variant-numeric:tabular-nums; color:var(--ink-soft); }
+  .ledger-row .locked{ color:var(--ink-soft); font-size:12px; }
+  .ledger-row .locked-amt{ text-align:right; font-variant-numeric:tabular-nums; font-size:13px; }
+  .del-btn{
+    border:none; background:none; color:var(--ink-faint); font-size:16px; cursor:pointer;
+    width:26px; height:26px; border-radius:6px; line-height:1;
+  }
+  .del-btn:hover{ background:var(--track); color:var(--ink); }
+  .del-btn:disabled{ visibility:hidden; }
+  .add-row{
+    display:flex; align-items:center; gap:6px; padding:11px 16px;
+    font-size:12.5px; color:var(--ink-soft); cursor:pointer; border-top:1px solid var(--border);
+  }
+  .add-row:hover{ background:#FAFAF8; color:var(--ink); }
+
+  .net-hero{ background:var(--dark); border-radius:14px; padding:20px 20px 18px; margin-bottom:14px; }
+  .net-label{ font-size:12px; color:#A9A9A6; margin-bottom:6px; }
+  .net-value{ font-size:32px; font-weight:700; color:#fff; font-variant-numeric:tabular-nums; letter-spacing:-0.01em; }
+  .net-value.neg{ color:#FF8A80; }
+  .net-sub{ font-size:11.5px; color:#7d7d7a; margin-top:5px; }
+
+  .csv-btn{
+    display:inline-flex; align-items:center; gap:6px;
+    background:var(--surface); border:1px solid var(--border); border-radius:9px;
+    padding:7px 13px; font-size:12.5px; color:var(--ink); cursor:pointer;
+  }
+  .csv-btn:hover{ background:#FAFAF8; }
+
+  .note{ margin-top:22px; padding:14px 16px; border:1px dashed var(--border); border-radius:12px; font-size:12px; color:var(--ink-soft); line-height:1.6; }
+
+  @media (max-width:380px){
+    .stat-grid{ grid-template-columns:1fr; }
+    .ledger-row{ grid-template-columns:1fr 55px 90px 24px; }
+  }
+</style>
+</head>
+<body>
+  <div class="app">
+    <div class="brand">N.THREE</div>
+    <div class="headrow">
+      <h1>売上・粗利ダッシュボード</h1>
+      <div class="period-select">
+        <span id="periodLabel">2026年9月度</span>
+        <svg width="10" height="6" viewBox="0 0 10 6" fill="none"><path d="M1 1L5 5L9 1" stroke="#8B8B86" stroke-width="1.4" stroke-linecap="round"/></svg>
+      </div>
+    </div>
+    <p class="subline" id="asofLine"></p>
+
+    <div style="display:flex; align-items:center; gap:10px; margin:0 0 18px;">
+      <label class="csv-btn" style="cursor:pointer;">
+        <input type="file" id="csvUpload" accept=".csv" style="display:none;">
+        CSVをアップロード
+      </label>
+      <span id="uploadStatus" style="font-size:12px; color:var(--ink-faint);"></span>
+      <button class="csv-btn" id="resetBtn" style="margin-left:auto; color:var(--neg); border-color:var(--neg);">全データをリセット</button>
+    </div>
+
+    <div class="nav-tabs" id="navTabs">
+      <div class="nav-tab active" data-panel="products">商品別</div>
+      <div class="nav-tab" data-panel="ledger">月次収支</div>
+    </div>
+
+    <div class="panel" id="panel-products">
+      <div class="tab-row" id="tabRow"></div>
+
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="stat-label" id="unitsLabel">販売本数</div>
+          <div class="stat-value" id="statUnits">—</div>
+        </div>
+        <div class="stat-card dark">
+          <div class="stat-label">目標達成率</div>
+          <div class="stat-value" id="statPct">—</div>
+          <div class="stat-sub" id="statPace"></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">売上</div>
+          <div class="stat-value" id="statRevenue">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">粗利</div>
+          <div class="stat-value" id="statProfit">—</div>
+        </div>
+        <div class="stat-card" style="grid-column: span 2;">
+          <div class="stat-label">来店数に対する販売率</div>
+          <div style="display:flex; align-items:baseline; gap:12px;">
+            <div class="stat-value" id="statRate">—</div>
+            <div style="font-size:12px; color:var(--ink-soft);">来店 <span id="statVisit">—</span></div>
+          </div>
+          <div class="stat-sub" id="statRateSub"></div>
+        </div>
+      </div>
+
+      <div class="section-row">
+        <div class="section-label">商品別の内訳(店舗+社員)</div>
+        <div class="section-note">2,820本目標</div>
+      </div>
+      <div class="product-list" id="productList"></div>
+
+      <div class="section-row">
+        <div class="section-label">社員販売の入力</div>
+        <div class="section-note" id="employeeTotalLabel">—</div>
+      </div>
+      <div style="display:flex; align-items:center; gap:10px; margin:-4px 0 12px;">
+        <label class="csv-btn" style="cursor:pointer;">
+          <input type="file" id="employeeUpload" accept=".csv" style="display:none;">
+          社割購入報告CSVをアップロード
+        </label>
+        <span id="employeeUploadStatus" style="font-size:12px; color:var(--ink-faint);"></span>
+      </div>
+      <div class="ledger-card">
+        <div class="employee-row">
+          <div></div>
+          <div class="colhead">単価</div>
+          <div class="colhead">本数</div>
+          <div class="colhead">売上/粗利</div>
+        </div>
+        <div id="employeeList"></div>
+      </div>
+
+      <div class="section-row">
+        <div class="section-label">日次の推移(<span id="trendViewLabel">全体</span>)</div>
+        <div class="section-note">実線=実績 / 破線=目標ペース</div>
+      </div>
+      <div class="trend-card">
+        <svg id="trendSvg" viewBox="0 0 560 170" style="width:100%; height:auto; display:block;"></svg>
+        <div class="trend-legend">
+          <span><span class="legend-dot actual"></span>累計実績</span>
+          <span><span class="legend-dot pace"></span>目標ペース</span>
+        </div>
+      </div>
+      <div class="projection-line" id="projectionLine"></div>
+      <div class="projection-line" id="monthlyCompareNote"></div>
+    </div>
+
+    <div class="panel hidden" id="panel-ledger">
+      <div class="section-row">
+        <div class="section-label">月次収支(手入力)</div>
+        <button class="csv-btn" id="csvBtn">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1V8M6 8L3 5M6 8L9 5M1.5 9.5V10.5C1.5 10.7761 1.72386 11 2 11H10C10.2761 11 10.5 10.7761 10.5 10.5V9.5" stroke="#17171A" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          CSV出力
+        </button>
+      </div>
+
+      <div class="net-hero">
+        <div class="net-label">純利益</div>
+        <div class="net-value" id="netValue">—</div>
+        <div class="net-sub" id="netSub"></div>
+      </div>
+
+      <div class="ledger-card">
+        <div class="ledger-head"><span>収入内訳</span><span id="revenueTotalLabel">—</span></div>
+        <div id="revenueList"></div>
+        <div class="add-row" id="addRevenueRow">+ 項目を追加</div>
+      </div>
+
+      <div class="ledger-card">
+        <div class="ledger-head"><span>支出内訳</span><span id="costTotalLabel">—</span></div>
+        <div id="costList"></div>
+        <div class="add-row" id="addCostRow">+ 項目を追加</div>
+      </div>
+    </div>
+
+    <div class="note">
+      毎日のCSVアップロードを前提に、「直近7日間」の窓データが重なる分を調整しながら月累計を推定する方式にしました(経過日数分だけを新規増分として加算)。日次の推移・着地予測もこの推定累計をもとに計算しています。先月比は10月以降、月をまたいだ時点で表示されます。社員販売の扱いは追ってご相談のうえ反映します。
+    </div>
+  </div>
+
+<script>
+  // ---- Supabase接続 ----
+  const SUPABASE_URL = 'https://rhpjjntxgbemqrdbdmyy.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_eQMbb2aoA-57MDOhAktEtQ_l-KiT3rf';
+  const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  const MONTH = '2026-09';
+
+  let TODAY_DAY = 5;
+  const DAYS_IN_MONTH = 30;
+  let uploadHistory = []; // [{day, units:[serum,lotion,cleansing,cream], visit, raw, bundle}] 各アップロード時点の「直近7日間」の値(生データ)
+  function dayProgressPct(){ return (TODAY_DAY / DAYS_IN_MONTH) * 100; }
+
+  // 初期値(Supabaseから読み込むまでの仮の値。読み込み後に上書きされます)
+  // 美容液・化粧水は「【キャンペーン】美容液＆化粧水」セット購入分を各1本ずつ加算(合計2本)
+  const PRODUCTS = [
+    { name: '美容液',      price: 990, cost: 436, profit: 554, target: 795, units: 0 },
+    { name: '化粧水',      price: 990, cost: 441, profit: 549, target: 825, units: 0 },
+    { name: 'クレンジング', price: 990, cost: 591, profit: 399, target: 825, units: 0  },
+    { name: 'クリーム',    price: 990, cost: 328, profit: 662, target: 375, units: 0  },
+  ];
+  let bundleCount = 0;   // 【キャンペーン】美容液＆化粧水 セット購入件数(参考値)
+  let visitTotal = 0;    // 来店数合計
+  let rawTotal = 0;      // 購入件数合計(CSVの「合計」列。本数ではなく件数ベース)
+
+  const COLS = {
+    visit: '来店数',
+    serumRepeat: 'セラム再購入', serumFirst: 'セラム初回', serumCampaign: '【キャンペーン】ガラクナイアシンセラム',
+    lotionRepeat: '化粧水再購入', lotionFirst: '化粧水初回', lotionCampaign: '【キャンペーン】W発酵化粧水',
+    bundleCampaign: '【キャンペーン】美容液＆化粧水',
+    cleansingFirst: 'クレンジングオイル（初回購入）', cleansingRepeat: 'クレンジングオイル（再購入）',
+    wmoistFirst: 'W Moist Lotion（初回購入）', wmoistRepeat: 'W Moist Lotion（再購入）',
+    creamFirst: 'Deep Repair Cream（初回購入）', creamRepeat: 'Deep Repair Cream（再購入）',
+    total: '合計',
+  };
+
+  // 初期値(Supabaseから読み込むまでの仮の値)
+  let employeeData = [
+    { name: PRODUCTS[0].name, cost: PRODUCTS[0].cost, price: 770, units: 0 },
+    { name: PRODUCTS[1].name, cost: PRODUCTS[1].cost, price: 770, units: 0 },
+    { name: PRODUCTS[2].name, cost: PRODUCTS[2].cost, price: 770, units: 0 },
+    { name: PRODUCTS[3].name, cost: PRODUCTS[3].cost, price: 770, units: 0 },
+  ];
+  let employeeRevenue = 0, employeeCost = 0;
+
+  const DEFAULT_LEDGER = {
+    revenueItems: [
+      { label: 'EC売上', units: 0, amount: 0 },
+      { label: '送料徴収', units: 0, amount: 0 },
+      { label: 'パートナー分', units: 0, amount: 0 },
+    ],
+    costItems: [
+      { label: 'POP代', amount: 0 },
+      { label: '化粧箱・ラベル修正', amount: 0 },
+      { label: 'LINE料金', amount: 0 },
+      { label: 'アタッチ手数料', amount: 0 },
+      { label: '倉庫費用', amount: 0 },
+    ]
+  };
+
+  let ledger = JSON.parse(JSON.stringify(DEFAULT_LEDGER));
+
+  const yen = n => (n < 0 ? '-¥' : '¥') + Math.abs(Math.round(n)).toLocaleString('ja-JP');
+  const num = n => Math.round(n).toLocaleString('ja-JP');
+  const isOnPace = pct => (pct - dayProgressPct()) >= -1;
+
+  // ---- Product totals (recomputed whenever PRODUCTS/employeeData changes) ----
+  // 目標本数(2,820本)の達成率には、店舗販売+社員販売の合算を使う
+  let totalUnits = 0, totalTarget = 0, autoRevenue = 0, autoCost = 0, overallPct = 0;
+  function combinedUnits(i){ return PRODUCTS[i].units + (Number(employeeData[i].units)||0); }
+  function recomputeProductTotals(){
+    totalUnits = 0; totalTarget = 0; autoRevenue = 0; autoCost = 0;
+    PRODUCTS.forEach((p,i) => {
+      const empUnits = Number(employeeData[i].units)||0;
+      const empPrice = Number(employeeData[i].price)||0;
+      const combined = p.units + empUnits;
+      totalUnits += combined;
+      totalTarget += p.target;
+      autoRevenue += p.units * p.price + empUnits * empPrice;
+      autoCost += combined * p.cost;
+    });
+    overallPct = (totalUnits / totalTarget) * 100;
+  }
+
+  // ---- 7日間ローリングCSVから真の月累計を推定する ----
+  // 直近7日間の窓データが重なりながら毎日アップロードされる前提で、
+  // 新しい窓のうち「経過日数分」だけを新規増分として加算していく近似方式。
+  function computeCumulativeSeries(){
+    const sorted = [...uploadHistory].sort((a,b)=>a.day-b.day);
+    let cum = [0,0,0,0];
+    let prevDay = null;
+    const days = [], perProduct = [[],[],[],[]], total = [];
+    sorted.forEach(entry => {
+      const day = entry.day;
+      if (prevDay === null){
+        cum = entry.units.slice();
+      } else {
+        const gap = day - prevDay;
+        if (gap <= 0){ /* 重複日付はスキップ */ return; }
+        if (gap >= 7){
+          cum = cum.map((c,i) => c + entry.units[i]);
+        } else {
+          const frac = gap / 7;
+          cum = cum.map((c,i) => c + entry.units[i] * frac);
+        }
+      }
+      days.push(day);
+      cum.forEach((c,i) => perProduct[i].push(c));
+      total.push(cum.reduce((a,b)=>a+b,0));
+      prevDay = day;
+    });
+    return { days, perProduct, total };
+  }
+
+  function applyCumulativeToProducts(){
+    const series = computeCumulativeSeries();
+    if (series.days.length === 0) return;
+    const last = series.days.length - 1;
+    PRODUCTS.forEach((p,i) => { p.units = Math.round(series.perProduct[i][last]); });
+  }
+
+  function employeeUnitsFor(view){
+    if (view === 'all') return employeeData.reduce((s,e)=>s+(Number(e.units)||0),0);
+    const idx = PRODUCTS.findIndex(p => p.name === view);
+    return Number(employeeData[idx].units)||0;
+  }
+
+  function drawTrendChart(view){
+    const series = computeCumulativeSeries();
+    const svg = document.getElementById('trendSvg');
+    document.getElementById('trendViewLabel').textContent = view === 'all' ? '全体' : view;
+    if (series.days.length < 2){
+      svg.innerHTML = '<text x="280" y="90" text-anchor="middle" font-size="12" fill="#B4B3AD">データが2日分以上たまると推移が表示されます</text>';
+      return;
+    }
+    const empOffset = employeeUnitsFor(view);
+    let values, target;
+    if (view === 'all'){
+      values = series.total.map(v => v + empOffset); target = totalTarget;
+    } else {
+      const idx = PRODUCTS.findIndex(p => p.name === view);
+      values = series.perProduct[idx].map(v => v + empOffset); target = PRODUCTS[idx].target;
+    }
+    const W = 560, H = 170, padL = 40, padR = 12, padT = 12, padB = 22;
+    const maxVal = Math.max(target, ...values) * 1.08;
+    const x = d => padL + ((d - 1) / (DAYS_IN_MONTH - 1)) * (W - padL - padR);
+    const y = v => H - padB - (v / maxVal) * (H - padT - padB);
+
+    const actualPts = series.days.map((d,i) => `${x(d)},${y(values[i])}`).join(' ');
+    const paceX1 = x(1), paceY1 = y(0), paceX2 = x(DAYS_IN_MONTH), paceY2 = y(target);
+
+    svg.innerHTML = `
+      <line x1="${padL}" y1="${H-padB}" x2="${W-padR}" y2="${H-padB}" stroke="#E6E5E1" stroke-width="1"/>
+      <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${H-padB}" stroke="#E6E5E1" stroke-width="1"/>
+      <text x="${padL-6}" y="${H-padB+4}" text-anchor="end" font-size="10" fill="#B4B3AD">0</text>
+      <text x="${padL-6}" y="${padT+8}" text-anchor="end" font-size="10" fill="#B4B3AD">${num(Math.round(maxVal))}</text>
+      <text x="${padL}" y="${H-4}" font-size="10" fill="#B4B3AD">1日</text>
+      <text x="${W-padR}" y="${H-4}" text-anchor="end" font-size="10" fill="#B4B3AD">${DAYS_IN_MONTH}日</text>
+      <line x1="${paceX1}" y1="${paceY1}" x2="${paceX2}" y2="${paceY2}" stroke="#B4B3AD" stroke-width="1.5" stroke-dasharray="4 4"/>
+      <polyline points="${actualPts}" fill="none" stroke="#17171A" stroke-width="2"/>
+      ${series.days.map((d,i)=>`<circle cx="${x(d)}" cy="${y(values[i])}" r="2.6" fill="#17171A"/>`).join('')}
+    `;
+  }
+
+  function renderProjection(view){
+    const series = computeCumulativeSeries();
+    const el = document.getElementById('projectionLine');
+    if (series.days.length === 0){ el.textContent = ''; return; }
+    const empOffset = employeeUnitsFor(view);
+    const lastDay = series.days[series.days.length-1];
+    let cumNow, target, label;
+    if (view === 'all'){
+      cumNow = series.total[series.total.length-1] + empOffset; target = totalTarget; label = '全体';
+    } else {
+      const idx = PRODUCTS.findIndex(p => p.name === view);
+      cumNow = series.perProduct[idx][series.perProduct[idx].length-1] + empOffset; target = PRODUCTS[idx].target; label = view;
+    }
+    const projected = Math.round((cumNow / lastDay) * DAYS_IN_MONTH);
+    const delta = projected - target;
+    el.classList.toggle('behind', delta < 0);
+    el.innerHTML = `${label}の着地予測: <b>${num(projected)}本</b>(目標${num(target)}本まで <b class="delta">${delta >= 0 ? '+' : ''}${num(delta)}本</b>、社員販売${num(empOffset)}本を含む)`;
+  }
+
+  function renderHeaderLine(){
+    document.getElementById('asofLine').innerHTML =
+      `2026年9月${TODAY_DAY}日時点・9/1〜9/${TODAY_DAY}累計(月${Math.round(dayProgressPct())}%経過)<span class="demo-badge">実データ(CSV反映)</span>` +
+      `<br>まとめ買い(美容液+化粧水セット): ${num(bundleCount)}件(本数に含む)`;
+  }
+
+  function renderSalesRate(){
+    const rate = visitTotal > 0 ? (rawTotal / visitTotal) * 100 : 0;
+    document.getElementById('statRate').textContent = rate.toFixed(2) + '%';
+    document.getElementById('statVisit').textContent = num(visitTotal) + '人';
+    document.getElementById('statRateSub').textContent = '購入 ' + num(rawTotal) + '件 / 来店 ' + num(visitTotal) + '人 の割合';
+  }
+
+  // ---- 社員販売(手入力・目標本数には含めない) ----
+  function recomputeEmployeeTotals(){
+    employeeRevenue = 0; employeeCost = 0;
+    employeeData.forEach(e => {
+      employeeRevenue += (Number(e.price)||0) * (Number(e.units)||0);
+      employeeCost += e.cost * (Number(e.units)||0);
+    });
+  }
+
+  async function saveEmployee(){
+    try{
+      const rows = employeeData.map(e => ({ month: MONTH, product: e.name, price: e.price, units: e.units }));
+      const { error } = await db.from('n3_employee_sales').upsert(rows, { onConflict: 'month,product' });
+      if (error) console.error('社員販売の保存に失敗しました', error);
+    }catch(e){ console.error('社員販売の保存に失敗しました', e); }
+  }
+
+  async function loadEmployee(){
+    try{
+      const { data, error } = await db.from('n3_employee_sales').select('*').eq('month', MONTH);
+      if (error) throw error;
+      if (data){
+        data.forEach(row => {
+          const item = employeeData.find(e => e.name === row.product);
+          if (item){ item.price = row.price; item.units = row.units; }
+        });
+      }
+    }catch(e){ console.error('社員販売の読み込みに失敗しました', e); }
+  }
+
+  function renderEmployee(){
+    const listEl = document.getElementById('employeeList');
+    listEl.innerHTML = '';
+    employeeData.forEach((e, idx) => {
+      const revenue = (Number(e.price)||0) * (Number(e.units)||0);
+      const profit = ((Number(e.price)||0) - e.cost) * (Number(e.units)||0);
+      const row = document.createElement('div');
+      row.className = 'employee-row';
+      row.innerHTML = `
+        <div class="name">${e.name}</div>
+        <input type="number" class="price" value="${e.price}">
+        <input type="number" class="units" value="${e.units || ''}" placeholder="0">
+        <div class="result">売上<b>${yen(revenue)}</b> / 粗利<b class="${profit<0?'neg':''}">${yen(profit)}</b></div>
+      `;
+      const priceInput = row.querySelector('.price');
+      const unitsInput = row.querySelector('.units');
+      priceInput.addEventListener('input', ev => { e.price = Number(ev.target.value)||0; refreshEmployee(); });
+      unitsInput.addEventListener('input', ev => { e.units = Number(ev.target.value)||0; refreshEmployee(); });
+      listEl.appendChild(row);
+    });
+    const totalRow = document.createElement('div');
+    totalRow.className = 'employee-row total';
+    totalRow.id = 'employeeTotalRow';
+    listEl.appendChild(totalRow);
+    refreshEmployee();
+  }
+
+  function refreshEmployee(){
+    recomputeEmployeeTotals();
+    const totalUnitsE = employeeData.reduce((s,e)=>s+(Number(e.units)||0),0);
+    document.getElementById('employeeTotalLabel').textContent =
+      num(totalUnitsE) + '本 ・ 売上' + yen(employeeRevenue) + ' ・ 粗利' + yen(employeeRevenue-employeeCost);
+    const totalRow = document.getElementById('employeeTotalRow');
+    if (totalRow){
+      totalRow.innerHTML = `
+        <div class="name">合計</div><div></div>
+        <div class="result" style="text-align:right;">${num(totalUnitsE)}本</div>
+        <div class="result">売上<b>${yen(employeeRevenue)}</b> / 粗利<b class="${(employeeRevenue-employeeCost)<0?'neg':''}">${yen(employeeRevenue-employeeCost)}</b></div>
+      `;
+    }
+    // 社員販売は目標達成率にも含まれるため、商品別の集計・表示を丸ごと再計算する
+    recomputeProductTotals();
+    renderProductList();
+    selectView(currentView);
+    refreshTotals();
+    renderLedger();
+    saveEmployee();
+  }
+
+  document.getElementById('employeeUpload').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const status = document.getElementById('employeeUploadStatus');
+    status.textContent = '読み込み中…';
+    Papa.parse(file, {
+      header: false,
+      skipEmptyLines: true,
+      encoding: 'Shift_JIS',
+      complete: (results) => {
+        const rows = results.data.slice(1); // 先頭行はヘッダーなので除く
+        const n2 = v => { const x = parseInt(v,10); return isNaN(x) ? 0 : x; };
+        let serum=0, lotion=0, cleansing=0, cream=0;
+        rows.forEach(r => {
+          serum += n2(r[4]);
+          lotion += n2(r[5]);
+          cleansing += n2(r[6]);
+          cream += n2(r[7]);
+        });
+        employeeData[0].units = serum;
+        employeeData[1].units = lotion;
+        employeeData[2].units = cleansing;
+        employeeData[3].units = cream;
+        renderEmployee();
+        status.textContent = '反映しました: ' + file.name + '(' + rows.length + '件)';
+      },
+      error: (err) => {
+        status.textContent = '読み込みに失敗しました';
+        console.error(err);
+      }
+    });
+  });
+
+  const productListEl = document.getElementById('productList');
+  function renderProductList(){
+    productListEl.innerHTML = '';
+    PRODUCTS.forEach((p, i) => {
+      const empUnits = Number(employeeData[i].units)||0;
+      const empPrice = Number(employeeData[i].price)||0;
+      const combined = p.units + empUnits;
+      const pct = (combined / p.target) * 100;
+      const revenue = p.units * p.price + empUnits * empPrice;
+      const profitTotal = revenue - combined * p.cost;
+      const onPace = isOnPace(pct);
+      const row = document.createElement('div');
+      row.className = 'product-row';
+      row.dataset.name = p.name;
+      row.innerHTML = `
+        <div class="product-row-top">
+          <div class="product-name">${p.name}</div>
+          <div class="product-units">${num(combined)} / ${num(p.target)} 本</div>
+        </div>
+        <div class="product-progress-row">
+          <div class="product-track"><div class="product-fill" style="width:${Math.min(pct,100)}%"></div></div>
+          <div class="product-pct">${pct.toFixed(0)}%</div>
+        </div>
+        <div class="product-meta">
+          <span><span class="pace-dot ${onPace ? '' : 'behind'}"></span>${onPace ? '順調' : 'やや遅れ'}</span>
+          <span>店舗 <b>${num(p.units)}本</b></span>
+          <span>社員 <b>${num(empUnits)}本</b></span>
+          <span>売上 <b>${yen(revenue)}</b></span>
+          <span>粗利 <b>${yen(profitTotal)}</b></span>
+        </div>
+      `;
+      row.addEventListener('click', () => selectView(p.name));
+      productListEl.appendChild(row);
+    });
+  }
+
+  // ---- View switch: 全体 / 商品別 ----
+  let currentView = 'all';
+
+  function renderTabs(){
+    const tabRow = document.getElementById('tabRow');
+    tabRow.innerHTML = '';
+    const views = ['all', ...PRODUCTS.map(p => p.name)];
+    views.forEach(v => {
+      const tab = document.createElement('div');
+      tab.className = 'tab' + (v === currentView ? ' active' : '');
+      tab.textContent = v === 'all' ? '全体' : v;
+      tab.addEventListener('click', () => selectView(v));
+      tabRow.appendChild(tab);
+    });
+  }
+
+  function selectView(view){
+    currentView = view;
+    renderTabs();
+
+    document.querySelectorAll('.product-row').forEach(row => {
+      row.classList.toggle('active', view !== 'all' && row.dataset.name === view);
+    });
+
+    let units, target, pct, revenue, profit;
+    if (view === 'all'){
+      units = totalUnits; target = totalTarget; pct = overallPct;
+      revenue = autoRevenue; profit = autoRevenue - autoCost;
+      document.getElementById('unitsLabel').textContent = '販売本数(全体・店舗+社員)';
+    } else {
+      const idx = PRODUCTS.findIndex(p => p.name === view);
+      const p = PRODUCTS[idx];
+      const empUnits = Number(employeeData[idx].units)||0;
+      const empPrice = Number(employeeData[idx].price)||0;
+      const combined = p.units + empUnits;
+      units = combined; target = p.target; pct = (combined / p.target) * 100;
+      revenue = p.units * p.price + empUnits * empPrice;
+      profit = revenue - combined * p.cost;
+      document.getElementById('unitsLabel').textContent = '販売本数(' + p.name + '・店舗+社員)';
+    }
+
+    document.getElementById('statUnits').innerHTML = num(units) + '<span class="unit"> / ' + num(target) + '本</span>';
+    document.getElementById('statPct').textContent = pct.toFixed(1) + '%';
+    document.getElementById('statPace').textContent =
+      (isOnPace(pct) ? 'ほぼ計画通り' : 'やや遅れ気味') + '(経過日数目安 ' + Math.round(dayProgressPct()) + '%)';
+    document.getElementById('statRevenue').textContent = yen(revenue);
+    document.getElementById('statProfit').textContent = yen(profit);
+
+    drawTrendChart(view);
+    renderProjection(view);
+  }
+
+  // ---- Ledger section (manual, persisted) ----
+  async function loadLedger(){
+    try{
+      const { data, error } = await db.from('n3_ledger_items').select('*').eq('month', MONTH).order('sort_order');
+      if (error) throw error;
+      if (!data || data.length === 0){
+        // 初回のみ、サンプルの項目をSupabaseに登録しておく
+        const seedRows = [
+          ...DEFAULT_LEDGER.revenueItems.map((it,i) => ({ month: MONTH, item_type: 'revenue', label: it.label, units: it.units, amount: it.amount, sort_order: i })),
+          ...DEFAULT_LEDGER.costItems.map((it,i) => ({ month: MONTH, item_type: 'cost', label: it.label, units: null, amount: it.amount, sort_order: i })),
+        ];
+        const { data: inserted, error: insErr } = await db.from('n3_ledger_items').insert(seedRows).select();
+        if (insErr) throw insErr;
+        ledger = { revenueItems: [], costItems: [] };
+        (inserted||[]).forEach(row => {
+          const item = { id: row.id, label: row.label, units: row.units||0, amount: Number(row.amount)||0 };
+          if (row.item_type === 'revenue') ledger.revenueItems.push(item);
+          else ledger.costItems.push(item);
+        });
+      } else {
+        ledger = { revenueItems: [], costItems: [] };
+        data.forEach(row => {
+          const item = { id: row.id, label: row.label, units: row.units||0, amount: Number(row.amount)||0 };
+          if (row.item_type === 'revenue') ledger.revenueItems.push(item);
+          else ledger.costItems.push(item);
+        });
+      }
+    }catch(e){ console.error('月次収支の読み込みに失敗しました', e); }
+    renderLedger();
+  }
+
+  async function updateLedgerItem(item, type){
+    try{
+      await db.from('n3_ledger_items').update({
+        label: item.label, units: item.units, amount: item.amount
+      }).eq('id', item.id);
+    }catch(e){ console.error('月次収支の保存に失敗しました', e); }
+  }
+
+  async function insertLedgerItem(type, sortOrder){
+    try{
+      const { data, error } = await db.from('n3_ledger_items').insert({
+        month: MONTH, item_type: type, label: '', units: type==='revenue' ? 0 : null, amount: 0, sort_order: sortOrder
+      }).select().single();
+      if (error) throw error;
+      return { id: data.id, label: '', units: 0, amount: 0 };
+    }catch(e){ console.error('項目の追加に失敗しました', e); return null; }
+  }
+
+  async function deleteLedgerItem(id){
+    try{ await db.from('n3_ledger_items').delete().eq('id', id); }
+    catch(e){ console.error('項目の削除に失敗しました', e); }
+  }
+
+  function computeTotals(){
+    const manualRevenue = ledger.revenueItems.reduce((s,i)=>s+(Number(i.amount)||0),0);
+    const manualCost = ledger.costItems.reduce((s,i)=>s+(Number(i.amount)||0),0);
+    const revenueTotal = autoRevenue + manualRevenue;
+    const costTotal = autoCost + manualCost;
+    const net = revenueTotal - costTotal;
+    return { revenueTotal, costTotal, net };
+  }
+
+  function refreshTotals(){
+    const { revenueTotal, costTotal, net } = computeTotals();
+    document.getElementById('revenueTotalLabel').textContent = yen(revenueTotal);
+    document.getElementById('costTotalLabel').textContent = yen(costTotal);
+    const netEl = document.getElementById('netValue');
+    netEl.textContent = yen(net);
+    netEl.classList.toggle('neg', net < 0);
+    document.getElementById('netSub').textContent = '収入合計 ' + yen(revenueTotal) + ' − 支出合計 ' + yen(costTotal);
+  }
+
+  function renderLedger(){
+    const revenueListEl = document.getElementById('revenueList');
+    revenueListEl.innerHTML = '';
+
+    const autoRevRow = document.createElement('div');
+    autoRevRow.className = 'ledger-row total';
+    autoRevRow.innerHTML = `
+      <div class="locked">商品売上(店舗+社員 自動計算)</div>
+      <div class="locked" style="text-align:right;">${num(totalUnits)}</div>
+      <div class="locked-amt">${yen(autoRevenue)}</div>
+      <div></div>
+    `;
+    revenueListEl.appendChild(autoRevRow);
+
+    ledger.revenueItems.forEach((item) => {
+      const row = document.createElement('div');
+      row.className = 'ledger-row';
+      row.innerHTML = `
+        <input type="text" class="label" value="${item.label}" placeholder="項目名">
+        <input type="number" class="units" value="${item.units || ''}" placeholder="本数">
+        <input type="number" class="amount" value="${item.amount || ''}" placeholder="0">
+        <button class="del-btn" title="削除">×</button>
+      `;
+      const [labelInput, unitsInput, amountInput] = row.querySelectorAll('input');
+      labelInput.addEventListener('input', e => { item.label = e.target.value; });
+      labelInput.addEventListener('change', () => updateLedgerItem(item, 'revenue'));
+      unitsInput.addEventListener('input', e => { item.units = Number(e.target.value)||0; });
+      unitsInput.addEventListener('change', () => updateLedgerItem(item, 'revenue'));
+      amountInput.addEventListener('input', e => { item.amount = Number(e.target.value)||0; refreshTotals(); });
+      amountInput.addEventListener('change', () => updateLedgerItem(item, 'revenue'));
+      row.querySelector('.del-btn').addEventListener('click', async () => {
+        ledger.revenueItems = ledger.revenueItems.filter(i => i !== item);
+        renderLedger(); refreshTotals();
+        await deleteLedgerItem(item.id);
+      });
+      revenueListEl.appendChild(row);
+    });
+
+    const costListEl = document.getElementById('costList');
+    costListEl.innerHTML = '';
+
+    const autoCostRow = document.createElement('div');
+    autoCostRow.className = 'ledger-row total';
+    autoCostRow.innerHTML = `
+      <div class="locked">仕入れ原価(店舗+社員 自動計算)</div>
+      <div></div>
+      <div class="locked-amt">${yen(autoCost)}</div>
+      <div></div>
+    `;
+    costListEl.appendChild(autoCostRow);
+
+    ledger.costItems.forEach((item) => {
+      const row = document.createElement('div');
+      row.className = 'ledger-row';
+      row.innerHTML = `
+        <input type="text" class="label" value="${item.label}" placeholder="項目名">
+        <div></div>
+        <input type="number" class="amount" value="${item.amount || ''}" placeholder="0">
+        <button class="del-btn" title="削除">×</button>
+      `;
+      const labelInput = row.querySelector('.label');
+      const amountInput = row.querySelector('.amount');
+      labelInput.addEventListener('input', e => { item.label = e.target.value; });
+      labelInput.addEventListener('change', () => updateLedgerItem(item, 'cost'));
+      amountInput.addEventListener('input', e => { item.amount = Number(e.target.value)||0; refreshTotals(); });
+      amountInput.addEventListener('change', () => updateLedgerItem(item, 'cost'));
+      row.querySelector('.del-btn').addEventListener('click', async () => {
+        ledger.costItems = ledger.costItems.filter(i => i !== item);
+        renderLedger(); refreshTotals();
+        await deleteLedgerItem(item.id);
+      });
+      costListEl.appendChild(row);
+    });
+
+    refreshTotals();
+  }
+
+  document.getElementById('addRevenueRow').addEventListener('click', async () => {
+    const item = await insertLedgerItem('revenue', ledger.revenueItems.length);
+    if (item){ ledger.revenueItems.push(item); renderLedger(); }
+  });
+  document.getElementById('addCostRow').addEventListener('click', async () => {
+    const item = await insertLedgerItem('cost', ledger.costItems.length);
+    if (item){ ledger.costItems.push(item); renderLedger(); }
+  });
+
+  document.getElementById('csvBtn').addEventListener('click', () => {
+    const { revenueTotal, costTotal, net } = computeTotals();
+    let csv = '\uFEFF';
+    csv += 'N.THREE 2026年9月度\n\n';
+    csv += '商品別内訳(店舗+社員 合算)\n';
+    csv += '商品,店舗本数,社員本数,合計本数,目標,達成率,売上,粗利\n';
+    PRODUCTS.forEach((p,i)=>{
+      const empUnits = Number(employeeData[i].units)||0;
+      const empPrice = Number(employeeData[i].price)||0;
+      const combined = p.units + empUnits;
+      const pct = (combined/p.target*100).toFixed(1);
+      const rev = p.units*p.price + empUnits*empPrice;
+      const prof = rev - combined*p.cost;
+      csv += `${p.name},${p.units},${empUnits},${combined},${p.target},${pct}%,${rev},${prof}\n`;
+    });
+    csv += `合計,,,${totalUnits},${totalTarget},${overallPct.toFixed(1)}%,${autoRevenue},${autoRevenue-autoCost}\n\n`;
+
+    csv += '来店・販売率\n来店数,購入件数,販売率\n';
+    csv += `${visitTotal},${rawTotal},${(visitTotal>0?(rawTotal/visitTotal*100):0).toFixed(2)}%\n\n`;
+
+    csv += '収入内訳\n項目,本数,金額\n';
+    csv += `商品売上(店舗+社員 自動計算),${totalUnits},${autoRevenue}\n`;
+    ledger.revenueItems.forEach(i=>{ csv += `${i.label},${i.units||0},${i.amount||0}\n`; });
+    csv += `収入合計,,${revenueTotal}\n\n`;
+
+    csv += '支出内訳\n項目,金額\n';
+    csv += `仕入れ原価(店舗+社員 自動計算),${autoCost}\n`;
+    ledger.costItems.forEach(i=>{ csv += `${i.label},${i.amount||0}\n`; });
+    csv += `支出合計,${costTotal}\n\n`;
+
+    csv += `純利益,${net}\n`;
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'n-three_2026-09-' + String(TODAY_DAY).padStart(2,'0') + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  });
+
+  // ---- CSV upload: 店舗別CSVから本数・来店数・販売率を再集計 ----
+  function n_(v){ const x = parseInt(v,10); return isNaN(x) ? 0 : x; }
+
+  function tryExtractDay(filename){
+    const m = filename.match(/2026-09-(\d{2})/);
+    return m ? parseInt(m[1],10) : null;
+  }
+
+  function applyParsedRows(rows, day){
+    let serum=0, lotion=0, cleansing=0, cream=0, bundle=0, visit=0, raw=0;
+    rows.forEach(row => {
+      serum += n_(row[COLS.serumRepeat]) + n_(row[COLS.serumFirst]) + n_(row[COLS.serumCampaign]);
+      lotion += n_(row[COLS.lotionRepeat]) + n_(row[COLS.lotionFirst]) + n_(row[COLS.lotionCampaign])
+              + n_(row[COLS.wmoistFirst]) + n_(row[COLS.wmoistRepeat]);
+      bundle += n_(row[COLS.bundleCampaign]);
+      cleansing += n_(row[COLS.cleansingFirst]) + n_(row[COLS.cleansingRepeat]);
+      cream += n_(row[COLS.creamFirst]) + n_(row[COLS.creamRepeat]);
+      visit += n_(row[COLS.visit]);
+      raw += n_(row[COLS.total]);
+    });
+    // セット購入(美容液＆化粧水)は各1本ずつ加算した「直近7日間の窓」データとして履歴に保存
+    const windowUnits = [serum + bundle, lotion + bundle, cleansing, cream];
+    uploadHistory = uploadHistory.filter(e => e.day !== day);
+    uploadHistory.push({ day, units: windowUnits, visit, raw, bundle });
+    uploadHistory.sort((a,b) => a.day - b.day);
+
+    bundleCount = bundle;
+    visitTotal = visit;
+    rawTotal = raw;
+
+    applyCumulativeToProducts();
+    recomputeProductTotals();
+    renderProductList();
+    renderTabs();
+    selectView(currentView);
+    renderSalesRate();
+    renderLedger();
+    saveDailyUpload(day, windowUnits, visit, raw, bundle);
+    saveMonthlySnapshot();
+  }
+
+  document.getElementById('csvUpload').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const status = document.getElementById('uploadStatus');
+    status.textContent = '読み込み中…';
+    const day = tryExtractDay(file.name) || TODAY_DAY;
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (results) => {
+        TODAY_DAY = day;
+        applyParsedRows(results.data, day);
+        renderHeaderLine();
+        status.textContent = '反映しました: ' + file.name;
+      },
+      error: (err) => {
+        status.textContent = '読み込みに失敗しました';
+        console.error(err);
+      }
+    });
+  });
+
+  // ---- Persistence(Supabase) ----
+  async function saveDailyUpload(day, units, visit, raw, bundle){
+    try{
+      const { error } = await db.from('n3_daily_uploads').upsert({
+        month: MONTH, day,
+        serum_units: units[0], lotion_units: units[1], cleansing_units: units[2], cream_units: units[3],
+        bundle_count: bundle, visit_total: visit, raw_total: raw
+      }, { onConflict: 'month,day' });
+      if (error) console.error('日次アップロードの保存に失敗しました', error);
+    }catch(e){ console.error('日次アップロードの保存に失敗しました', e); }
+  }
+
+  async function loadHistory(){
+    try{
+      const { data, error } = await db.from('n3_daily_uploads').select('*').eq('month', MONTH).order('day');
+      if (error) throw error;
+      uploadHistory = (data||[]).map(row => ({
+        day: row.day,
+        units: [row.serum_units, row.lotion_units, row.cleansing_units, row.cream_units],
+        visit: row.visit_total, raw: row.raw_total, bundle: row.bundle_count
+      }));
+      if (uploadHistory.length > 0){
+        const last = uploadHistory[uploadHistory.length-1];
+        TODAY_DAY = last.day; bundleCount = last.bundle; visitTotal = last.visit; rawTotal = last.raw;
+      }
+    }catch(e){ console.error('履歴の読み込みに失敗しました', e); }
+  }
+
+  // 月をまたいだ比較用に、当月の最新累計を月次サマリーとして保存しておく
+  async function saveMonthlySnapshot(){
+    try{
+      const { error } = await db.from('n3_monthly_summary').upsert({
+        month: MONTH, total_units: totalUnits, total_target: totalTarget,
+        auto_revenue: autoRevenue, auto_cost: autoCost, last_day: TODAY_DAY
+      }, { onConflict: 'month' });
+      if (error) console.error('月次サマリーの保存に失敗しました', error);
+    }catch(e){ console.error('月次サマリーの保存に失敗しました', e); }
+  }
+
+  async function renderMonthlyCompare(){
+    try{
+      const { data, error } = await db.from('n3_monthly_summary').select('*').neq('month', MONTH).order('month', { ascending: false }).limit(1);
+      if (error) throw error;
+      const note = document.getElementById('monthlyCompareNote');
+      if (!note) return;
+      if (!data || data.length === 0){
+        note.textContent = '先月以前のデータはまだありません。10月以降、先月比がここに表示されます。';
+      } else {
+        const prev = data[0];
+        const diff = totalUnits - prev.total_units;
+        note.innerHTML = `${prev.month}比: <b>${diff >= 0 ? '+' : ''}${num(diff)}本</b>(${prev.month}は${num(prev.last_day)}日時点で${num(prev.total_units)}本)`;
+      }
+    }catch(e){ console.error('先月比の読み込みに失敗しました', e); }
+  }
+
+  document.querySelectorAll('.nav-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      const target = tab.dataset.panel;
+      document.querySelectorAll('.panel').forEach(p => {
+        p.classList.toggle('hidden', p.id !== 'panel-' + target);
+      });
+      if (target === 'products') drawTrendChart(currentView);
+    });
+  });
+
+  document.getElementById('resetBtn').addEventListener('click', async () => {
+    if (!confirm('商品別・社員販売・月次収支・履歴のすべてのデータをリセットします。よろしいですか?')) return;
+
+    try{
+      await db.from('n3_daily_uploads').delete().eq('month', MONTH);
+      await db.from('n3_employee_sales').delete().eq('month', MONTH);
+      await db.from('n3_ledger_items').delete().eq('month', MONTH);
+      await db.from('n3_monthly_summary').delete().eq('month', MONTH);
+    }catch(e){ console.error('リセットに失敗しました', e); }
+
+    PRODUCTS.forEach(p => p.units = 0);
+    bundleCount = 0; visitTotal = 0; rawTotal = 0; TODAY_DAY = 1;
+    uploadHistory = [];
+    employeeData.forEach(e => e.units = 0);
+    ledger = { revenueItems: [], costItems: [] };
+
+    recomputeProductTotals();
+    renderProductList();
+    renderTabs();
+    selectView('all');
+    renderHeaderLine();
+    renderSalesRate();
+    renderEmployee();
+    renderLedger();
+    document.getElementById('monthlyCompareNote').textContent = '';
+    document.getElementById('uploadStatus').textContent = '';
+    document.getElementById('employeeUploadStatus').textContent = '';
+  });
+
+  async function init(){
+    await loadHistory();
+    applyCumulativeToProducts();
+    recomputeProductTotals();
+    renderProductList();
+    renderTabs();
+    selectView('all');
+    renderHeaderLine();
+    renderSalesRate();
+    await loadEmployee();
+    renderEmployee();
+    await loadLedger();
+    await saveMonthlySnapshot();
+    await renderMonthlyCompare();
+  }
+  init();
+</script>
+</body>
+</html>
