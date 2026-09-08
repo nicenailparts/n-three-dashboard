@@ -435,8 +435,12 @@
   const SEPT_EARLY_REVENUE = [80050, 52000, 0, 0];
   function storeRevenue(i){
     const p = PRODUCTS[i];
-    const remaining = Math.max(0, p.units - SEPT_EARLY_UNITS[i]);
-    return SEPT_EARLY_REVENUE[i] + remaining * p.price;
+    const earlyUnits = SEPT_EARLY_UNITS[i];
+    const earlyRevenueTotal = SEPT_EARLY_REVENUE[i];
+    const avgEarlyPrice = earlyUnits > 0 ? earlyRevenueTotal / earlyUnits : 0;
+    const creditedEarly = Math.min(p.units, earlyUnits); // 実際にアップロードされている本数分だけ、9/1〜9/4の単価を適用
+    const remaining = Math.max(0, p.units - earlyUnits);
+    return creditedEarly * avgEarlyPrice + remaining * p.price;
   }
 
   const COLS = {
