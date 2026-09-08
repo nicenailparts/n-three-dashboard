@@ -242,7 +242,7 @@
 
     <div class="nav-tabs" id="navTabs">
       <div class="nav-tab active" data-panel="products">商品別</div>
-      <div class="nav-tab" data-panel="ledger">月次収支</div>
+      <div class="nav-tab" data-panel="ledger">累計収支</div>
     </div>
 
     <div class="panel" id="panel-products">
@@ -335,7 +335,7 @@
 
     <div class="panel hidden" id="panel-ledger">
       <div class="section-row">
-        <div class="section-label">月次収支(手入力)</div>
+        <div class="section-label">累計収支(手入力)</div>
         <button class="csv-btn" id="csvBtn">
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1V8M6 8L3 5M6 8L9 5M1.5 9.5V10.5C1.5 10.7761 1.72386 11 2 11H10C10.2761 11 10.5 10.7761 10.5 10.5V9.5" stroke="#17171A" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
           CSV出力
@@ -353,17 +353,6 @@
       </div>
 
       <div id="liveLedgerView">
-      <div class="section-row">
-        <div class="section-label">今月の状況</div>
-        <div class="section-note">9/1〜9/4は1650円、9/5以降は990円で計算</div>
-      </div>
-
-      <div class="net-hero light">
-        <div class="net-label" id="netLabel">純利益(今月)</div>
-        <div class="net-value" id="netValue">—</div>
-        <div class="net-sub" id="netSub"></div>
-      </div>
-
       <div class="ledger-card">
         <div class="ledger-head"><span>収入内訳</span><span id="revenueTotalLabel">—</span></div>
         <div id="revenueList"></div>
@@ -392,7 +381,7 @@
 
 
     <div class="note">
-      毎日「今月」(月初からの累計)期間でダウンロードしたCSVをそのままアップロードする運用です。アップロードした値をそのまま真の月累計として扱うので、推定計算は行っていません。日次の推移・着地予測もこの累計をもとに計算しています。先月比は10月以降、月をまたいだ時点で表示されます。
+      毎日「今月」(月初からの累計)期間でダウンロードしたCSVをそのままアップロードする運用です。アップロードした値をそのまま真の月累計として扱うので、推定計算は行っていません。日次の推移・着地予測もこの累計をもとに計算しています。先月比は10月以降、月をまたいだ時点で表示されます。純利益は月ごとではなく、発売開始からの累計でのみ表示されます(売上はヘッダーの月選択で月ごとに確認できます)。
     </div>
   </div>
 
@@ -885,11 +874,6 @@
     const { revenueTotal, costTotal, net } = computeTotals(currentLedgerView);
     document.getElementById('revenueTotalLabel').textContent = yen(revenueTotal);
     document.getElementById('costTotalLabel').textContent = yen(costTotal);
-    const netEl = document.getElementById('netValue');
-    netEl.textContent = yen(net);
-    netEl.classList.toggle('neg', net < 0);
-    document.getElementById('netSub').textContent = '収入合計 ' + yen(revenueTotal) + ' − 支出合計 ' + yen(costTotal);
-    document.getElementById('netLabel').textContent = currentLedgerView === 'all' ? '純利益(今月・全体)' : '純利益(今月・' + currentLedgerView + ')';
     document.getElementById('ledgerScopeHeading').textContent = currentLedgerView === 'all' ? 'N.THREE 全体' : currentLedgerView;
     document.getElementById('ledgerScopeNote').textContent = currentLedgerView === 'all'
       ? '全商品+共通費をまとめた会社全体の収支です。'
@@ -938,18 +922,32 @@
     };
   }
 
+  function manualLedgerFor(tag){
+    const revItems = ledger.revenueItems.filter(i => i.product === tag);
+    const costItems = ledger.costItems.filter(i => i.product === tag);
+    return {
+      revenue: revItems.reduce((s,i)=>s+(Number(i.amount)||0),0),
+      cost: costItems.reduce((s,i)=>s+(Number(i.amount)||0),0),
+    };
+  }
+
   function computeLifetime(view){
     if (view === 'all'){
       let revenue = 0, cost = 0, units = 0;
       PRODUCTS.forEach((p,i) => {
         const f = lifetimeFiguresForProduct(i);
-        revenue += f.revenue; cost += f.cost; units += f.units;
+        const manual = manualLedgerFor(p.name);
+        revenue += f.revenue + manual.revenue; cost += f.cost + manual.cost; units += f.units;
       });
+      const common = manualLedgerFor('all'); // 共通費用は1回だけ加算
+      revenue += common.revenue; cost += common.cost;
       return { revenue, cost, profit: revenue-cost, units };
     }
     const idx = PRODUCTS.findIndex(p => p.name === view);
     const f = lifetimeFiguresForProduct(idx);
-    return { revenue: f.revenue, cost: f.cost, profit: f.revenue-f.cost, units: f.units };
+    const manual = manualLedgerFor(view);
+    const revenue = f.revenue + manual.revenue, cost = f.cost + manual.cost;
+    return { revenue, cost, profit: revenue-cost, units: f.units };
   }
 
   function renderLifetimeProfit(){
@@ -1212,16 +1210,6 @@
 
     const costListEl = document.getElementById('costList');
     costListEl.innerHTML = '';
-
-    const autoCostRow = document.createElement('div');
-    autoCostRow.className = 'ledger-row total';
-    autoCostRow.innerHTML = `
-      <div class="locked">仕入れ原価(${auto.label} 自動計算)</div>
-      <div></div>
-      <div class="locked-amt">${yen(auto.cost)}</div>
-      <div></div>
-    `;
-    costListEl.appendChild(autoCostRow);
 
     const visibleCostItems = currentLedgerView === 'all' ? ledger.costItems : ledger.costItems.filter(i => i.product === currentLedgerView);
     visibleCostItems.forEach((item) => {
