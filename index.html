@@ -51,6 +51,14 @@
     background:var(--surface); border:1px solid var(--border);
     border-radius:9px; padding:8px 12px; font-size:13px; white-space:nowrap;
   }
+  .period-dropdown{
+    position:absolute; top:calc(100% + 6px); right:0; z-index:20;
+    background:var(--surface); border:1px solid var(--border); border-radius:10px;
+    min-width:140px; overflow:hidden; box-shadow:0 4px 16px rgba(0,0,0,0.08);
+  }
+  .period-option{ padding:9px 14px; font-size:13px; color:var(--ink); cursor:pointer; }
+  .period-option:hover{ background:var(--track); }
+  .period-option.active{ font-weight:700; }
   .subline{ font-size:13px; color:var(--ink-soft); margin:0 0 20px; }
   .demo-badge{
     display:inline-block; font-size:10.5px; color:var(--ink-soft);
@@ -68,6 +76,7 @@
   }
   .nav-tab.active{ color:var(--ink); border-bottom-color:var(--dark); }
   .panel.hidden{ display:none; }
+  .hidden{ display:none; }
 
   .tab-row{
     display:flex; gap:6px; overflow-x:auto; margin:2px 0 18px; padding-bottom:2px;
@@ -113,7 +122,9 @@
   .product-fill{ height:100%; background:var(--dark); border-radius:100px; }
   .product-pct{ font-size:12px; font-weight:600; font-variant-numeric:tabular-nums; width:32px; text-align:right; }
   .product-meta{ display:flex; align-items:center; gap:10px 16px; flex-wrap:wrap; font-size:12.5px; color:var(--ink-soft); }
+  .neg{ color:var(--neg); }
   .product-meta b{ color:var(--ink); font-weight:600; font-variant-numeric:tabular-nums; }
+  .product-meta b.neg{ color:var(--neg); }
   .pace-dot{ display:inline-block; width:6px; height:6px; border-radius:50%; background:var(--dark); margin-right:5px; }
   .pace-dot.behind{ background:transparent; border:1.4px solid var(--ink-faint); }
 
@@ -208,14 +219,15 @@
     <div class="brand">N.THREE</div>
     <div class="headrow">
       <h1>売上・粗利ダッシュボード</h1>
-      <div class="period-select">
+      <div class="period-select" id="periodSelect" style="position:relative; cursor:pointer;">
         <span id="periodLabel">2026年9月度</span>
         <svg width="10" height="6" viewBox="0 0 10 6" fill="none"><path d="M1 1L5 5L9 1" stroke="#8B8B86" stroke-width="1.4" stroke-linecap="round"/></svg>
+        <div class="period-dropdown hidden" id="periodDropdown"></div>
       </div>
     </div>
     <p class="subline" id="asofLine"></p>
 
-    <div style="display:flex; align-items:center; gap:10px; margin:0 0 18px;">
+    <div id="liveControlsRow" style="display:flex; align-items:center; gap:10px; margin:0 0 18px;">
       <label class="csv-btn" style="cursor:pointer;">
         <input type="file" id="csvUpload" accept=".csv" style="display:none;">
         CSVをアップロード
@@ -224,12 +236,17 @@
       <button class="csv-btn" id="resetBtn" style="margin-left:auto; color:var(--neg); border-color:var(--neg);">全データをリセット</button>
     </div>
 
+    <div class="note hidden" id="pastMonthNotice" style="margin-bottom:18px;">
+      過去の月(確定値)を表示しています。CSVアップロードや編集はできません。<span id="backToCurrentLink" style="text-decoration:underline; cursor:pointer; color:var(--ink);">今月に戻る</span>
+    </div>
+
     <div class="nav-tabs" id="navTabs">
       <div class="nav-tab active" data-panel="products">商品別</div>
       <div class="nav-tab" data-panel="ledger">月次収支</div>
     </div>
 
     <div class="panel" id="panel-products">
+      <div id="liveProductsView">
       <div class="tab-row" id="tabRow"></div>
 
       <div class="stat-grid">
@@ -300,6 +317,20 @@
       </div>
       <div class="projection-line" id="projectionLine"></div>
       <div class="projection-line" id="monthlyCompareNote"></div>
+      </div>
+
+      <div class="hidden" id="pastProductsView">
+        <div class="section-row">
+          <div class="section-label" id="pastProductsLabel">2026年7月</div>
+          <div class="section-note">確定値(過去のCSVより)</div>
+        </div>
+        <div class="product-list" id="pastProductsList"></div>
+        <div class="stat-card" style="margin-top:10px;">
+          <div class="stat-label">この月の合計</div>
+          <div class="stat-value" id="pastProductsRevenue">—</div>
+          <div class="stat-sub" id="pastProductsSub"></div>
+        </div>
+      </div>
     </div>
 
     <div class="panel hidden" id="panel-ledger">
@@ -321,6 +352,7 @@
         <div class="net-sub" id="lifetimeSub"></div>
       </div>
 
+      <div id="liveLedgerView">
       <div class="section-row">
         <div class="section-label">今月の状況</div>
         <div class="section-note">9/1〜9/4は1650円、9/5以降は990円で計算</div>
@@ -343,7 +375,21 @@
         <div id="costList"></div>
         <div class="add-row" id="addCostRow">+ 項目を追加</div>
       </div>
+      </div>
+
+      <div class="hidden" id="pastLedgerView">
+        <div class="section-row">
+          <div class="section-label">この月の売上</div>
+          <div class="section-note">確定値・過去の月は編集できません</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">売上</div>
+          <div class="stat-value" id="pastLedgerRevenue">—</div>
+          <div class="stat-sub" id="pastLedgerSub"></div>
+        </div>
+      </div>
     </div>
+
 
     <div class="note">
       毎日「今月」(月初からの累計)期間でダウンロードしたCSVをそのままアップロードする運用です。アップロードした値をそのまま真の月累計として扱うので、推定計算は行っていません。日次の推移・着地予測もこの累計をもとに計算しています。先月比は10月以降、月をまたいだ時点で表示されます。
@@ -355,10 +401,19 @@
   const SUPABASE_URL = 'https://rhpjjntxgbemqrdbdmyy.supabase.co';
   const SUPABASE_KEY = 'sb_publishable_eQMbb2aoA-57MDOhAktEtQ_l-KiT3rf';
   const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-  const MONTH = '2026-09';
 
-  let TODAY_DAY = 5;
-  const DAYS_IN_MONTH = 30;
+  // ---- 月・日付は「今日」から自動で計算する(手動で書き換える必要はありません) ----
+  const START_MONTH = '2026-07'; // 商品第一弾(美容液)の発売月。月選択ドロップダウンの起点
+  function monthKeyOf(date){ return date.getFullYear() + '-' + String(date.getMonth()+1).padStart(2,'0'); }
+  function daysInMonthOf(monthKey){
+    const [y,m] = monthKey.split('-').map(Number);
+    return new Date(y, m, 0).getDate();
+  }
+  const TODAY = new Date();
+  const MONTH = monthKeyOf(TODAY); // 今、ライブで追跡している月(今日の日付から自動判定)
+
+  let TODAY_DAY = TODAY.getDate();
+  let DAYS_IN_MONTH = daysInMonthOf(MONTH);
   let uploadHistory = []; // [{day, units:[serum,lotion,cleansing,cream], visit, raw, bundle}] 各アップロード時点の「今月累計」の値
   function dayProgressPct(){ return (TODAY_DAY / DAYS_IN_MONTH) * 100; }
 
@@ -528,8 +583,9 @@
   }
 
   function renderHeaderLine(){
+    const [my, mm] = MONTH.split('-').map(Number);
     document.getElementById('asofLine').innerHTML =
-      `2026年9月${TODAY_DAY}日時点・9/1〜9/${TODAY_DAY}累計(月${Math.round(dayProgressPct())}%経過)<span class="demo-badge">実データ(CSV反映)</span>` +
+      `${my}年${mm}月${TODAY_DAY}日時点・${mm}/1〜${mm}/${TODAY_DAY}累計(月${Math.round(dayProgressPct())}%経過)<span class="demo-badge">実データ(CSV反映)</span>` +
       `<br>まとめ買い(美容液+化粧水セット): ${num(bundleCount)}件(本数に含む)`;
   }
 
@@ -856,29 +912,40 @@
     }catch(e){ console.error('累計利益ベースラインの読み込みに失敗しました', e); }
   }
 
+  function lifetimeFiguresForProduct(i){
+    const p = PRODUCTS[i];
+    // 確定済みの過去月(7月・8月、以降は自動確定される月)をすべて合算
+    let pastUnits = 0, pastRevenue = 0, pastCost = 0;
+    Object.keys(monthlyProductSummary).forEach(monthKey => {
+      if (monthKey === MONTH) return; // ライブ中の月はここでは含めない(下で別計算)
+      const d = monthlyProductSummary[monthKey][p.name];
+      if (d){ pastUnits += d.units; pastRevenue += d.revenue; pastCost += d.cost; }
+    });
+    // 今ライブ追跡中の月
+    const empUnits = Number(employeeData[i].units)||0;
+    const empPrice = Number(employeeData[i].price)||0;
+    const combined = p.units + empUnits;
+    const liveRevenue = storeRevenue(i) + empUnits*empPrice;
+    const liveCost = combined*p.cost;
+    return {
+      units: pastUnits + combined,
+      revenue: pastRevenue + liveRevenue,
+      cost: pastCost + liveCost,
+    };
+  }
+
   function computeLifetime(view){
     if (view === 'all'){
       let revenue = 0, cost = 0, units = 0;
       PRODUCTS.forEach((p,i) => {
-        const empUnits = Number(employeeData[i].units)||0;
-        const empPrice = Number(employeeData[i].price)||0;
-        const combined = p.units + empUnits;
-        const base = productBaseline[i];
-        revenue += base.revenue + storeRevenue(i) + empUnits*empPrice;
-        cost += base.cost + combined*p.cost;
-        units += base.units + combined;
+        const f = lifetimeFiguresForProduct(i);
+        revenue += f.revenue; cost += f.cost; units += f.units;
       });
       return { revenue, cost, profit: revenue-cost, units };
     }
     const idx = PRODUCTS.findIndex(p => p.name === view);
-    const p = PRODUCTS[idx];
-    const empUnits = Number(employeeData[idx].units)||0;
-    const empPrice = Number(employeeData[idx].price)||0;
-    const combined = p.units + empUnits;
-    const base = productBaseline[idx];
-    const revenue = base.revenue + storeRevenue(idx) + empUnits*empPrice;
-    const cost = base.cost + combined*p.cost;
-    return { revenue, cost, profit: revenue-cost, units: base.units + combined };
+    const f = lifetimeFiguresForProduct(idx);
+    return { revenue: f.revenue, cost: f.cost, profit: f.revenue-f.cost, units: f.units };
   }
 
   function renderLifetimeProfit(){
@@ -891,6 +958,188 @@
     document.getElementById('lifetimeSub').textContent =
       '累計本数 ' + num(lt.units) + '本 ・ 累計売上 ' + yen(lt.revenue) + ' − 累計原価 ' + yen(lt.cost);
   }
+
+  // ---- 月選択(ヘッダーのドロップダウン)。過去の月は確定値の読み取り専用表示にする ----
+  function generatePeriodMonths(){
+    const months = [];
+    let [y,m] = START_MONTH.split('-').map(Number);
+    const [ey,em] = MONTH.split('-').map(Number);
+    while (y < ey || (y === ey && m <= em)){
+      const key = y + '-' + String(m).padStart(2,'0');
+      months.push({ key, label: y + '年' + m + '月' });
+      m++; if (m > 12){ m = 1; y++; }
+    }
+    return months;
+  }
+  const PERIOD_MONTHS = generatePeriodMonths();
+  let VIEW_MONTH = MONTH; // 表示中の月。MONTHは常に「今」進行中の月(9月)
+  let monthlyProductSummary = {}; // { '2026-07': { '美容液': {units,revenue,cost} }, ... }
+
+  async function loadMonthlyProductSummary(){
+    try{
+      const { data, error } = await db.from('n3_monthly_product_summary').select('*');
+      if (error) throw error;
+      monthlyProductSummary = {};
+      (data||[]).forEach(row => {
+        if (!monthlyProductSummary[row.month]) monthlyProductSummary[row.month] = {};
+        monthlyProductSummary[row.month][row.product] = {
+          units: row.units, revenue: Number(row.revenue), cost: Number(row.cost)
+        };
+      });
+    }catch(e){ console.error('月別実績の読み込みに失敗しました', e); }
+  }
+
+  // 月が切り替わったタイミングで、前月までにライブ追跡していた月(CSVアップロード履歴がある月)を
+  // 自動で「確定値」としてn3_monthly_product_summaryに保存する。7月・8月のように手動登録済みの月は上書きしない。
+  async function archivePastMonths(){
+    for (const m of PERIOD_MONTHS){
+      if (m.key === MONTH) continue; // 今ライブ追跡中の月は対象外
+      if (monthlyProductSummary[m.key]) continue; // 既に確定値がある月(7月・8月含む)はそのまま
+
+      try{
+        const { data: uploads, error: upErr } = await db.from('n3_daily_uploads').select('*').eq('month', m.key).order('day', { ascending: false }).limit(1);
+        if (upErr) throw upErr;
+        if (!uploads || uploads.length === 0) continue; // その月のアップロード履歴が無ければスキップ
+
+        const last = uploads[0];
+        const monthUnits = [last.serum_units, last.lotion_units, last.cleansing_units, last.cream_units];
+
+        const { data: empRows } = await db.from('n3_employee_sales').select('*').eq('month', m.key);
+        const empByProduct = {};
+        (empRows||[]).forEach(r => { empByProduct[r.product] = r; });
+
+        const rows = PRODUCTS.map((p,i) => {
+          const emp = empByProduct[p.name] || { units: 0, price: 770 };
+          const empUnits = Number(emp.units)||0, empPrice = Number(emp.price)||0;
+          const combined = monthUnits[i] + empUnits;
+          let revenue;
+          if (m.key === '2026-09'){
+            // 9月は価格改定(9/5〜990円)をまたぐため、9/1〜9/4分だけ旧単価で計算する
+            const remaining = Math.max(0, monthUnits[i] - SEPT_EARLY_UNITS[i]);
+            revenue = SEPT_EARLY_REVENUE[i] + remaining * p.price + empUnits*empPrice;
+          } else {
+            revenue = monthUnits[i]*p.price + empUnits*empPrice;
+          }
+          const cost = combined * p.cost;
+          return { month: m.key, product: p.name, units: combined, revenue, cost };
+        });
+
+        const { error: insErr } = await db.from('n3_monthly_product_summary').upsert(rows, { onConflict: 'month,product' });
+        if (insErr) throw insErr;
+
+        monthlyProductSummary[m.key] = {};
+        rows.forEach(r => { monthlyProductSummary[m.key][r.product] = { units: r.units, revenue: r.revenue, cost: r.cost }; });
+      }catch(e){ console.error(m.key + 'の確定値作成に失敗しました', e); }
+    }
+  }
+
+  function appendHistoryRow(listEl, name, units, revenue, cost){
+    const profit = revenue - cost;
+    const row = document.createElement('div');
+    row.className = 'product-row';
+    row.innerHTML = `
+      <div class="product-row-top">
+        <div class="product-name">${name}</div>
+        <div class="product-units">${num(units)}本</div>
+      </div>
+      <div class="product-meta">
+        <span>売上 <b>${yen(revenue)}</b></span>
+        <span>原価 <b>${yen(cost)}</b></span>
+        <span>粗利 <b class="${profit<0?'neg':''}">${yen(profit)}</b></span>
+      </div>
+    `;
+    listEl.appendChild(row);
+  }
+
+  function getMonthProductFigures(monthKey){
+    // 指定した月の商品別 units/revenue/cost を返す(進行中の月ならライブ計算、過去の月なら確定値)
+    if (monthKey === MONTH){
+      return PRODUCTS.map((p,i) => {
+        const empUnits = Number(employeeData[i].units)||0;
+        const empPrice = Number(employeeData[i].price)||0;
+        const combined = p.units + empUnits;
+        return { name: p.name, units: combined, revenue: storeRevenue(i) + empUnits*empPrice, cost: combined*p.cost };
+      });
+    }
+    const monthData = monthlyProductSummary[monthKey] || {};
+    return PRODUCTS.map(p => {
+      const d = monthData[p.name] || { units: 0, revenue: 0, cost: 0 };
+      return { name: p.name, units: d.units, revenue: d.revenue, cost: d.cost };
+    });
+  }
+
+  function renderPastProductsView(){
+    const info = PERIOD_MONTHS.find(m => m.key === VIEW_MONTH);
+    document.getElementById('pastProductsLabel').textContent = info ? info.label : VIEW_MONTH;
+    const listEl = document.getElementById('pastProductsList');
+    listEl.innerHTML = '';
+    let totalRevenue = 0, totalCost = 0, totalUnitsM = 0;
+    getMonthProductFigures(VIEW_MONTH).forEach(d => {
+      totalRevenue += d.revenue; totalCost += d.cost; totalUnitsM += d.units;
+      appendHistoryRow(listEl, d.name, d.units, d.revenue, d.cost);
+    });
+    document.getElementById('pastProductsRevenue').textContent = yen(totalRevenue);
+    document.getElementById('pastProductsSub').textContent =
+      '本数 ' + num(totalUnitsM) + '本 ・ 原価 ' + yen(totalCost) + ' ・ 粗利 ' + yen(totalRevenue-totalCost);
+  }
+
+  function renderPastLedgerView(){
+    const totalRevenue = getMonthProductFigures(VIEW_MONTH).reduce((s,d) => s+d.revenue, 0);
+    document.getElementById('pastLedgerRevenue').textContent = yen(totalRevenue);
+    const info = PERIOD_MONTHS.find(m => m.key === VIEW_MONTH);
+    document.getElementById('pastLedgerSub').textContent = (info ? info.label : VIEW_MONTH) + 'の商品売上合計(店舗+社員)';
+  }
+
+  function applyViewMonth(){
+    const isLive = VIEW_MONTH === MONTH;
+    const info = PERIOD_MONTHS.find(m => m.key === VIEW_MONTH);
+    document.getElementById('periodLabel').textContent = (info ? info.label : VIEW_MONTH) + (isLive ? '度' : '');
+    document.querySelectorAll('.period-option').forEach(o => o.classList.toggle('active', o.dataset.month === VIEW_MONTH));
+
+    document.getElementById('liveControlsRow').classList.toggle('hidden', !isLive);
+    document.getElementById('pastMonthNotice').classList.toggle('hidden', isLive);
+    document.getElementById('liveProductsView').classList.toggle('hidden', !isLive);
+    document.getElementById('pastProductsView').classList.toggle('hidden', isLive);
+    document.getElementById('liveLedgerView').classList.toggle('hidden', !isLive);
+    document.getElementById('pastLedgerView').classList.toggle('hidden', isLive);
+
+    if (isLive){
+      drawTrendChart(currentView);
+    } else {
+      renderPastProductsView();
+      renderPastLedgerView();
+    }
+  }
+
+  function renderPeriodDropdown(){
+    const dd = document.getElementById('periodDropdown');
+    dd.innerHTML = '';
+    PERIOD_MONTHS.forEach(m => {
+      const opt = document.createElement('div');
+      opt.className = 'period-option' + (m.key === VIEW_MONTH ? ' active' : '');
+      opt.dataset.month = m.key;
+      opt.textContent = m.label;
+      opt.addEventListener('click', (e) => {
+        e.stopPropagation();
+        VIEW_MONTH = m.key;
+        dd.classList.add('hidden');
+        applyViewMonth();
+      });
+      dd.appendChild(opt);
+    });
+  }
+
+  document.getElementById('periodSelect').addEventListener('click', (e) => {
+    document.getElementById('periodDropdown').classList.toggle('hidden');
+    e.stopPropagation();
+  });
+  document.addEventListener('click', () => {
+    document.getElementById('periodDropdown').classList.add('hidden');
+  });
+  document.getElementById('backToCurrentLink').addEventListener('click', () => {
+    VIEW_MONTH = MONTH;
+    applyViewMonth();
+  });
 
   function renderLedgerTabs(){
     const tabRow = document.getElementById('ledgerTabRow');
@@ -1015,7 +1264,8 @@
   document.getElementById('csvBtn').addEventListener('click', () => {
     const { revenueTotal, costTotal, net } = computeTotals(currentLedgerView);
     let csv = '\uFEFF';
-    csv += `N.THREE 2026年9月度(月次収支: ${currentLedgerView === 'all' ? '全体' : currentLedgerView})\n\n`;
+    const [cy, cm] = MONTH.split('-').map(Number);
+    csv += `N.THREE ${cy}年${cm}月度(月次収支: ${currentLedgerView === 'all' ? '全体' : currentLedgerView})\n\n`;
     csv += '商品別内訳(店舗+社員 合算)\n';
     csv += '商品,店舗本数,社員本数,合計本数,目標,達成率,売上,粗利\n';
     PRODUCTS.forEach((p,i)=>{
@@ -1051,7 +1301,7 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'n-three_2026-09-' + String(TODAY_DAY).padStart(2,'0') + '.csv';
+    a.download = 'n-three_' + MONTH + '-' + String(TODAY_DAY).padStart(2,'0') + '.csv';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -1062,7 +1312,8 @@
   function n_(v){ const x = parseInt(v,10); return isNaN(x) ? 0 : x; }
 
   function tryExtractDay(filename){
-    const m = filename.match(/2026-09-(\d{2})/);
+    const re = new RegExp(MONTH + '-(\\d{2})');
+    const m = filename.match(re);
     return m ? parseInt(m[1],10) : null;
   }
 
@@ -1232,11 +1483,14 @@
     renderSalesRate();
     await loadEmployee();
     renderEmployee();
-    await loadBaseline();
+    await loadMonthlyProductSummary();
+    await archivePastMonths();
     renderLedgerTabs();
     await loadLedger();
     await saveMonthlySnapshot();
     await renderMonthlyCompare();
+    renderPeriodDropdown();
+    applyViewMonth();
   }
   init();
 </script>
