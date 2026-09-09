@@ -709,8 +709,9 @@
       const empPrice = Number(employeeData[i].price)||0;
       const combined = p.units + empUnits;
       const pct = (combined / p.target) * 100;
-      const revenue = storeRevenue(i) + empUnits * empPrice;
-      const profitTotal = revenue - combined * p.cost;
+      const manual = manualLedgerFor(p.name);
+      const revenue = storeRevenue(i) + empUnits * empPrice + manual.revenue;
+      const profitTotal = revenue - (combined * p.cost + manual.cost);
       const onPace = isOnPace(pct);
       const row = document.createElement('div');
       row.className = 'product-row';
@@ -763,8 +764,14 @@
 
     let units, target, pct, revenue, profit;
     if (view === 'all'){
-      units = totalUnits; target = totalTarget; pct = overallPct;
-      revenue = autoRevenue; profit = autoRevenue - autoCost;
+      units = totalUnits; target = totalTarget;
+      pct = overallPct;
+      let manualRev = 0, manualCost = 0;
+      PRODUCTS.forEach(p => { const m = manualLedgerFor(p.name); manualRev += m.revenue; manualCost += m.cost; });
+      const common = manualLedgerFor('all');
+      manualRev += common.revenue; manualCost += common.cost;
+      revenue = autoRevenue + manualRev;
+      profit = revenue - (autoCost + manualCost);
       document.getElementById('unitsLabel').textContent = '販売本数(全体・店舗+社員)';
     } else {
       const idx = PRODUCTS.findIndex(p => p.name === view);
@@ -772,9 +779,10 @@
       const empUnits = Number(employeeData[idx].units)||0;
       const empPrice = Number(employeeData[idx].price)||0;
       const combined = p.units + empUnits;
+      const manual = manualLedgerFor(view);
       units = combined; target = p.target; pct = (combined / p.target) * 100;
-      revenue = storeRevenue(idx) + empUnits * empPrice;
-      profit = revenue - combined * p.cost;
+      revenue = storeRevenue(idx) + empUnits * empPrice + manual.revenue;
+      profit = revenue - (combined * p.cost + manual.cost);
       document.getElementById('unitsLabel').textContent = '販売本数(' + p.name + '・店舗+社員)';
     }
 
@@ -879,6 +887,8 @@
       ? '全商品+共通費をまとめた会社全体の収支です。'
       : '「' + currentLedgerView + '」に紐づく項目だけを表示しています。共通費(全体タグ)は「全体」タブでのみ表示されます。';
     renderLifetimeProfit();
+    renderProductList();
+    selectView(currentView);
   }
 
   // ---- 累計利益(発売開始〜現在。7月・8月の実績+今月の分) ----
@@ -1479,6 +1489,8 @@
     await archivePastMonths();
     renderLedgerTabs();
     await loadLedger();
+    renderProductList();
+    selectView(currentView);
     await saveMonthlySnapshot();
     await renderMonthlyCompare();
     renderPeriodDropdown();
