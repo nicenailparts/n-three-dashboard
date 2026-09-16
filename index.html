@@ -298,6 +298,20 @@
       </div>
 
       <div class="section-row">
+        <div class="section-label">スクール販売の入力</div>
+        <div class="section-note" id="schoolTotalLabel">—</div>
+      </div>
+      <div class="ledger-card">
+        <div class="employee-row">
+          <div></div>
+          <div class="colhead">単価</div>
+          <div class="colhead">本数</div>
+          <div class="colhead">売上/粗利</div>
+        </div>
+        <div id="schoolList"></div>
+      </div>
+
+      <div class="section-row">
         <div class="section-label">社員販売の入力</div>
         <div class="section-note" id="employeeTotalLabel">—</div>
       </div>
@@ -475,6 +489,14 @@
   ];
   let ecRevenue = 0, ecCost = 0;
 
+  let schoolData = [
+    { name: PRODUCTS[0].name, cost: PRODUCTS[0].cost, price: 990, units: 0 },
+    { name: PRODUCTS[1].name, cost: PRODUCTS[1].cost, price: 990, units: 0 },
+    { name: PRODUCTS[2].name, cost: PRODUCTS[2].cost, price: 990, units: 0 },
+    { name: PRODUCTS[3].name, cost: PRODUCTS[3].cost, price: 990, units: 0 },
+  ];
+  let schoolRevenue = 0, schoolCost = 0;
+
   const DEFAULT_LEDGER = {
     revenueItems: [
       { label: 'EC売上', units: 0, amount: 0 },
@@ -507,11 +529,13 @@
       const empPrice = Number(employeeData[i].price)||0;
       const ecUnits = Number(ecData[i].units)||0;
       const ecPrice = Number(ecData[i].price)||0;
+      const schoolUnits = Number(schoolData[i].units)||0;
+      const schoolPrice = Number(schoolData[i].price)||0;
       const manualUnits = manualUnitsFor(p.name);
-      const combined = p.units + empUnits + ecUnits + manualUnits;
+      const combined = p.units + empUnits + ecUnits + schoolUnits + manualUnits;
       totalUnits += combined;
       totalTarget += p.target;
-      autoRevenue += storeRevenue(i) + empUnits * empPrice + ecUnits * ecPrice;
+      autoRevenue += storeRevenue(i) + empUnits * empPrice + ecUnits * ecPrice + schoolUnits * schoolPrice;
       autoCost += combined * p.cost;
     });
     overallPct = (totalUnits / totalTarget) * 100;
@@ -772,6 +796,85 @@
     saveEc();
   }
 
+  // ---- スクール販売(手入力・目標本数にも含める) ----
+  function recomputeSchoolTotals(){
+    schoolRevenue = 0; schoolCost = 0;
+    schoolData.forEach(e => {
+      schoolRevenue += (Number(e.price)||0) * (Number(e.units)||0);
+      schoolCost += e.cost * (Number(e.units)||0);
+    });
+  }
+
+  async function saveSchool(){
+    try{
+      const rows = schoolData.map(e => ({ month: MONTH, product: e.name, price: e.price, units: e.units }));
+      const { error } = await db.from('n3_school_sales').upsert(rows, { onConflict: 'month,product' });
+      if (error) console.error('スクール販売の保存に失敗しました', error);
+    }catch(e){ console.error('スクール販売の保存に失敗しました', e); }
+  }
+
+  async function loadSchool(){
+    try{
+      const { data, error } = await db.from('n3_school_sales').select('*').eq('month', MONTH);
+      if (error) throw error;
+      if (data){
+        data.forEach(row => {
+          const item = schoolData.find(e => e.name === row.product);
+          if (item){ item.price = row.price; item.units = row.units; }
+        });
+      }
+    }catch(e){ console.error('スクール販売の読み込みに失敗しました', e); }
+  }
+
+  function renderSchool(){
+    const listEl = document.getElementById('schoolList');
+    listEl.innerHTML = '';
+    schoolData.forEach((e) => {
+      const revenue = (Number(e.price)||0) * (Number(e.units)||0);
+      const profit = ((Number(e.price)||0) - e.cost) * (Number(e.units)||0);
+      const row = document.createElement('div');
+      row.className = 'employee-row';
+      row.innerHTML = `
+        <div class="name">${e.name}</div>
+        <input type="number" class="price" value="${e.price}">
+        <input type="number" class="units" value="${e.units || ''}" placeholder="0">
+        <div class="result">売上<b>${yen(revenue)}</b> / 粗利<b class="${profit<0?'neg':''}">${yen(profit)}</b></div>
+      `;
+      const priceInput = row.querySelector('.price');
+      const unitsInput = row.querySelector('.units');
+      priceInput.addEventListener('input', ev => { e.price = Number(ev.target.value)||0; refreshSchool(); });
+      unitsInput.addEventListener('input', ev => { e.units = Number(ev.target.value)||0; refreshSchool(); });
+      listEl.appendChild(row);
+    });
+    const totalRow = document.createElement('div');
+    totalRow.className = 'employee-row total';
+    totalRow.id = 'schoolTotalRow';
+    listEl.appendChild(totalRow);
+    refreshSchool();
+  }
+
+  function refreshSchool(){
+    recomputeSchoolTotals();
+    const totalUnitsSchool = schoolData.reduce((s,e)=>s+(Number(e.units)||0),0);
+    document.getElementById('schoolTotalLabel').textContent =
+      num(totalUnitsSchool) + '本 ・ 売上' + yen(schoolRevenue) + ' ・ 粗利' + yen(schoolRevenue-schoolCost);
+    const totalRow = document.getElementById('schoolTotalRow');
+    if (totalRow){
+      totalRow.innerHTML = `
+        <div class="name">合計</div><div></div>
+        <div class="result" style="text-align:right;">${num(totalUnitsSchool)}本</div>
+        <div class="result">売上<b>${yen(schoolRevenue)}</b> / 粗利<b class="${(schoolRevenue-schoolCost)<0?'neg':''}">${yen(schoolRevenue-schoolCost)}</b></div>
+      `;
+    }
+    // スクールも目標達成率に含まれるため、商品別の集計・表示を丸ごと再計算する
+    recomputeProductTotals();
+    renderProductList();
+    selectView(currentView);
+    refreshTotals();
+    renderLedger();
+    saveSchool();
+  }
+
   document.getElementById('employeeUpload').addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -813,11 +916,13 @@
       const empPrice = Number(employeeData[i].price)||0;
       const ecUnits = Number(ecData[i].units)||0;
       const ecPrice = Number(ecData[i].price)||0;
+      const schoolUnits = Number(schoolData[i].units)||0;
+      const schoolPrice = Number(schoolData[i].price)||0;
       const manual = manualLedgerFor(p.name);
       const manualUnits = manualUnitsFor(p.name);
-      const combined = p.units + empUnits + ecUnits + manualUnits;
+      const combined = p.units + empUnits + ecUnits + schoolUnits + manualUnits;
       const pct = (combined / p.target) * 100;
-      const revenue = storeRevenue(i) + empUnits * empPrice + ecUnits * ecPrice + manual.revenue;
+      const revenue = storeRevenue(i) + empUnits * empPrice + ecUnits * ecPrice + schoolUnits * schoolPrice + manual.revenue;
       const profitTotal = revenue - (combined * p.cost + manual.cost);
       const onPace = isOnPace(pct);
       const row = document.createElement('div');
@@ -887,11 +992,13 @@
       const empPrice = Number(employeeData[idx].price)||0;
       const ecUnits = Number(ecData[idx].units)||0;
       const ecPrice = Number(ecData[idx].price)||0;
+      const schoolUnits = Number(schoolData[idx].units)||0;
+      const schoolPrice = Number(schoolData[idx].price)||0;
       const manual = manualLedgerFor(view);
       const manualUnits = manualUnitsFor(view);
-      const combined = p.units + empUnits + ecUnits + manualUnits;
+      const combined = p.units + empUnits + ecUnits + schoolUnits + manualUnits;
       units = combined; target = p.target; pct = (combined / p.target) * 100;
-      revenue = storeRevenue(idx) + empUnits * empPrice + ecUnits * ecPrice + manual.revenue;
+      revenue = storeRevenue(idx) + empUnits * empPrice + ecUnits * ecPrice + schoolUnits * schoolPrice + manual.revenue;
       profit = revenue - (combined * p.cost + manual.cost);
       document.getElementById('unitsLabel').textContent = '販売本数(' + p.name + '・店舗+社員)';
     }
@@ -973,9 +1080,11 @@
     const empPrice = Number(employeeData[idx].price)||0;
     const ecUnits = Number(ecData[idx].units)||0;
     const ecPrice = Number(ecData[idx].price)||0;
+    const schoolUnits = Number(schoolData[idx].units)||0;
+    const schoolPrice = Number(schoolData[idx].price)||0;
     const manualUnits = manualUnitsFor(view);
-    const combined = p.units + empUnits + ecUnits + manualUnits;
-    return { revenue: storeRevenue(idx) + empUnits*empPrice + ecUnits*ecPrice, cost: combined*p.cost, units: combined, label: view + '・店舗+社員+EC' };
+    const combined = p.units + empUnits + ecUnits + schoolUnits + manualUnits;
+    return { revenue: storeRevenue(idx) + empUnits*empPrice + ecUnits*ecPrice + schoolUnits*schoolPrice, cost: combined*p.cost, units: combined, label: view + '・店舗+社員+EC+スクール' };
   }
 
   function computeTotals(view){
@@ -1038,9 +1147,11 @@
     const empPrice = Number(employeeData[i].price)||0;
     const ecUnits = Number(ecData[i].units)||0;
     const ecPrice = Number(ecData[i].price)||0;
+    const schoolUnits = Number(schoolData[i].units)||0;
+    const schoolPrice = Number(schoolData[i].price)||0;
     const manualUnits = manualUnitsFor(p.name);
-    const combined = p.units + empUnits + ecUnits + manualUnits;
-    const liveRevenue = storeRevenue(i) + empUnits*empPrice + ecUnits*ecPrice;
+    const combined = p.units + empUnits + ecUnits + schoolUnits + manualUnits;
+    const liveRevenue = storeRevenue(i) + empUnits*empPrice + ecUnits*ecPrice + schoolUnits*schoolPrice;
     const liveCost = combined*p.cost;
     return {
       units: pastUnits + combined,
@@ -1070,8 +1181,13 @@
         const manual = manualLedgerFor(p.name);
         revenue += f.revenue + manual.revenue; cost += f.cost + manual.cost; units += f.units;
       });
-      const common = manualLedgerFor('all'); // 共通費用は1回だけ加算
+      const common = manualLedgerFor('all'); // 今ライブ中の月の共通費用
       revenue += common.revenue; cost += common.cost;
+      Object.keys(monthlyProductSummary).forEach(monthKey => {
+        if (monthKey === MONTH) return;
+        const c = monthlyProductSummary[monthKey]['__common__'];
+        if (c){ revenue += c.revenue; cost += c.cost; }
+      });
       return { revenue, cost, profit: revenue-cost, units };
     }
     const idx = PRODUCTS.findIndex(p => p.name === view);
@@ -1141,21 +1257,49 @@
         const empByProduct = {};
         (empRows||[]).forEach(r => { empByProduct[r.product] = r; });
 
+        const { data: ecRows } = await db.from('n3_ec_sales').select('*').eq('month', m.key);
+        const ecByProduct = {};
+        (ecRows||[]).forEach(r => { ecByProduct[r.product] = r; });
+
+        const { data: schoolRows } = await db.from('n3_school_sales').select('*').eq('month', m.key);
+        const schoolByProduct = {};
+        (schoolRows||[]).forEach(r => { schoolByProduct[r.product] = r; });
+
+        const { data: ledgerRows } = await db.from('n3_ledger_items').select('*').eq('month', m.key);
+        const ledgerByProduct = {};
+        let commonRevenue = 0, commonCost = 0;
+        (ledgerRows||[]).forEach(r => {
+          const amt = Number(r.amount)||0;
+          if (r.product === 'all'){
+            if (r.item_type === 'revenue') commonRevenue += amt; else commonCost += amt;
+          } else {
+            if (!ledgerByProduct[r.product]) ledgerByProduct[r.product] = { revenue: 0, cost: 0 };
+            if (r.item_type === 'revenue') ledgerByProduct[r.product].revenue += amt; else ledgerByProduct[r.product].cost += amt;
+          }
+        });
+
         const rows = PRODUCTS.map((p,i) => {
           const emp = empByProduct[p.name] || { units: 0, price: 770 };
           const empUnits = Number(emp.units)||0, empPrice = Number(emp.price)||0;
-          const combined = monthUnits[i] + empUnits;
-          let revenue;
+          const ec = ecByProduct[p.name] || { units: 0, price: 990 };
+          const ecUnits = Number(ec.units)||0, ecPrice = Number(ec.price)||0;
+          const school = schoolByProduct[p.name] || { units: 0, price: 990 };
+          const schoolUnits = Number(school.units)||0, schoolPrice = Number(school.price)||0;
+          const manual = ledgerByProduct[p.name] || { revenue: 0, cost: 0 };
+          const combined = monthUnits[i] + empUnits + ecUnits + schoolUnits;
+          let storeRev;
           if (m.key === '2026-09'){
             // 9月は価格改定(9/5〜990円)をまたぐため、9/1〜9/4分だけ旧単価で計算する
             const remaining = Math.max(0, monthUnits[i] - SEPT_EARLY_UNITS[i]);
-            revenue = SEPT_EARLY_REVENUE[i] + remaining * p.price + empUnits*empPrice;
+            storeRev = SEPT_EARLY_REVENUE[i] + remaining * p.price;
           } else {
-            revenue = monthUnits[i]*p.price + empUnits*empPrice;
+            storeRev = monthUnits[i]*p.price;
           }
-          const cost = combined * p.cost;
+          const revenue = storeRev + empUnits*empPrice + ecUnits*ecPrice + schoolUnits*schoolPrice + manual.revenue;
+          const cost = combined * p.cost + manual.cost;
           return { month: m.key, product: p.name, units: combined, revenue, cost };
         });
+        rows.push({ month: m.key, product: '__common__', units: 0, revenue: commonRevenue, cost: commonCost });
 
         const { error: insErr } = await db.from('n3_monthly_product_summary').upsert(rows, { onConflict: 'month,product' });
         if (insErr) throw insErr;
@@ -1192,9 +1336,11 @@
         const empPrice = Number(employeeData[i].price)||0;
         const ecUnits = Number(ecData[i].units)||0;
         const ecPrice = Number(ecData[i].price)||0;
+        const schoolUnits = Number(schoolData[i].units)||0;
+        const schoolPrice = Number(schoolData[i].price)||0;
         const manualUnits = manualUnitsFor(p.name);
-        const combined = p.units + empUnits + ecUnits + manualUnits;
-        return { name: p.name, units: combined, revenue: storeRevenue(i) + empUnits*empPrice + ecUnits*ecPrice, cost: combined*p.cost };
+        const combined = p.units + empUnits + ecUnits + schoolUnits + manualUnits;
+        return { name: p.name, units: combined, revenue: storeRevenue(i) + empUnits*empPrice + ecUnits*ecPrice + schoolUnits*schoolPrice, cost: combined*p.cost };
       });
     }
     const monthData = monthlyProductSummary[monthKey] || {};
@@ -1399,10 +1545,12 @@
       const empPrice = Number(employeeData[i].price)||0;
       const ecUnits = Number(ecData[i].units)||0;
       const ecPrice = Number(ecData[i].price)||0;
+      const schoolUnits = Number(schoolData[i].units)||0;
+      const schoolPrice = Number(schoolData[i].price)||0;
       const manualUnits = manualUnitsFor(p.name);
-      const combined = p.units + empUnits + ecUnits + manualUnits;
+      const combined = p.units + empUnits + ecUnits + schoolUnits + manualUnits;
       const pct = (combined/p.target*100).toFixed(1);
-      const rev = storeRevenue(i) + empUnits*empPrice + ecUnits*ecPrice;
+      const rev = storeRevenue(i) + empUnits*empPrice + ecUnits*ecPrice + schoolUnits*schoolPrice;
       const prof = rev - combined*p.cost;
       csv += `${p.name},${p.units},${empUnits},${ecUnits},${combined},${p.target},${pct}%,${rev},${prof}\n`;
     });
@@ -1577,6 +1725,7 @@
       await db.from('n3_daily_uploads').delete().eq('month', MONTH);
       await db.from('n3_employee_sales').delete().eq('month', MONTH);
       await db.from('n3_ec_sales').delete().eq('month', MONTH);
+      await db.from('n3_school_sales').delete().eq('month', MONTH);
       await db.from('n3_ledger_items').delete().eq('month', MONTH);
       await db.from('n3_monthly_summary').delete().eq('month', MONTH);
     }catch(e){ console.error('リセットに失敗しました', e); }
@@ -1586,6 +1735,7 @@
     uploadHistory = [];
     employeeData.forEach(e => e.units = 0);
     ecData.forEach(e => e.units = 0);
+    schoolData.forEach(e => e.units = 0);
     ledger = { revenueItems: [], costItems: [] };
     currentLedgerView = 'all';
 
@@ -1597,6 +1747,7 @@
     renderSalesRate();
     renderEmployee();
     renderEc();
+    renderSchool();
     renderLedgerTabs();
     renderLedger();
     document.getElementById('monthlyCompareNote').textContent = '';
@@ -1617,6 +1768,8 @@
     renderEmployee();
     await loadEc();
     renderEc();
+    await loadSchool();
+    renderSchool();
     await loadMonthlyProductSummary();
     await archivePastMonths();
     renderLedgerTabs();
