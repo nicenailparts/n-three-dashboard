@@ -278,9 +278,13 @@
       </div>
 
       <div class="section-row">
-        <div class="section-label">商品別の内訳(店舗+社員+EC)</div>
-        <div class="section-note">2,820本目標</div>
+        <div class="section-label">商品別の内訳(全販路)</div>
+        <button class="csv-btn" id="csvBtn2" style="padding:5px 10px; font-size:11.5px;">
+          <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M6 1V8M6 8L3 5M6 8L9 5M1.5 9.5V10.5C1.5 10.7761 1.72386 11 2 11H10C10.2761 11 10.5 10.7761 10.5 10.5V9.5" stroke="#17171A" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          CSV出力
+        </button>
       </div>
+      <div class="section-note" style="margin:-8px 2px 10px;">2,820本目標</div>
       <div class="product-list" id="productList"></div>
 
       <div class="section-row">
@@ -1046,6 +1050,9 @@
           <span><span class="pace-dot ${onPace ? '' : 'behind'}"></span>${onPace ? '順調' : 'やや遅れ'}</span>
           <span>店舗 <b>${num(p.units)}本</b></span>
           <span>社員 <b>${num(empUnits)}本</b></span>
+          <span>EC <b>${num(ecUnits)}本</b></span>
+          <span>スクール <b>${num(schoolUnits)}本</b></span>
+          <span>FC <b>${num(fcUnits)}本</b></span>
           <span>売上 <b>${yen(revenue)}</b></span>
           <span>粗利 <b>${yen(profitTotal)}</b></span>
         </div>
@@ -1652,13 +1659,13 @@
     if (item){ ledger.costItems.push(item); renderLedger(); }
   });
 
-  document.getElementById('csvBtn').addEventListener('click', () => {
+  function exportCsv(){
     const { revenueTotal, costTotal, net } = computeTotals(currentLedgerView);
     let csv = '\uFEFF';
     const [cy, cm] = MONTH.split('-').map(Number);
     csv += `N.THREE ${cy}年${cm}月度(月次収支: ${currentLedgerView === 'all' ? '全体' : currentLedgerView})\n\n`;
-    csv += '商品別内訳(店舗+社員 合算)\n';
-    csv += '商品,店舗本数,社員本数,EC本数,合計本数,目標,達成率,売上,粗利\n';
+    csv += '商品別内訳(全販路)\n';
+    csv += '商品,店舗本数,社員本数,EC本数,スクール本数,FC本数,合計本数,目標,達成率,売上,粗利\n';
     PRODUCTS.forEach((p,i)=>{
       const empUnits = Number(employeeData[i].units)||0;
       const empPrice = Number(employeeData[i].price)||0;
@@ -1673,9 +1680,9 @@
       const pct = (combined/p.target*100).toFixed(1);
       const rev = storeRevenue(i) + empUnits*empPrice + ecUnits*ecPrice + schoolUnits*schoolPrice + fcUnits*fcPrice;
       const prof = rev - combined*p.cost;
-      csv += `${p.name},${p.units},${empUnits},${ecUnits},${combined},${p.target},${pct}%,${rev},${prof}\n`;
+      csv += `${p.name},${p.units},${empUnits},${ecUnits},${schoolUnits},${fcUnits},${combined},${p.target},${pct}%,${rev},${prof}\n`;
     });
-    csv += `合計,,,${totalUnits},${totalTarget},${overallPct.toFixed(1)}%,${autoRevenue},${autoRevenue-autoCost}\n\n`;
+    csv += `合計,,,,,,${totalUnits},${totalTarget},${overallPct.toFixed(1)}%,${autoRevenue},${autoRevenue-autoCost}\n\n`;
 
     csv += '来店・販売率\n来店数,購入件数,販売率\n';
     csv += `${visitTotal},${rawTotal},${(visitTotal>0?(rawTotal/visitTotal*100):0).toFixed(2)}%\n\n`;
@@ -1704,7 +1711,11 @@
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-  });
+  }
+
+  document.getElementById('csvBtn').addEventListener('click', exportCsv);
+  const csvBtn2 = document.getElementById('csvBtn2');
+  if (csvBtn2) csvBtn2.addEventListener('click', exportCsv);
 
   // ---- CSV upload: 店舗別CSVから本数・来店数・販売率を再集計 ----
   function n_(v){ const x = parseInt(v,10); return isNaN(x) ? 0 : x; }
