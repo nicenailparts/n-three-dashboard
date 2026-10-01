@@ -377,8 +377,12 @@
       <div class="hidden" id="pastProductsView">
         <div class="section-row">
           <div class="section-label" id="pastProductsLabel">2026年7月</div>
-          <div class="section-note" id="pastProductsNote">確定値(過去のCSVより)</div>
+          <button class="csv-btn" id="csvBtn3" style="padding:5px 10px; font-size:11.5px;">
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M6 1V8M6 8L3 5M6 8L9 5M1.5 9.5V10.5C1.5 10.7761 1.72386 11 2 11H10C10.2761 11 10.5 10.7761 10.5 10.5V9.5" stroke="#17171A" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            CSV出力
+          </button>
         </div>
+        <div class="section-note" id="pastProductsNote" style="margin:-8px 2px 10px;">確定値(過去のCSVより)</div>
 
         <div class="stat-grid">
           <div class="stat-card">
@@ -1928,53 +1932,80 @@
   });
 
   function exportCsv(){
-    const { revenueTotal, costTotal, net } = computeTotals(currentLedgerView);
+    const monthKey = VIEW_MONTH;
+    const isLiveMonth = monthKey === MONTH;
+    const isEditablePast = !isLiveMonth && monthKey >= LEDGER_START_MONTH && pastChannelData;
+    const [cy, cm] = monthKey.split('-').map(Number);
+
     let csv = '\uFEFF';
-    const [cy, cm] = MONTH.split('-').map(Number);
-    csv += `N.THREE ${cy}年${cm}月度(月次収支: ${currentLedgerView === 'all' ? '全体' : currentLedgerView})\n\n`;
+    csv += `N.THREE ${cy}年${cm}月度${isLiveMonth ? '(進行中)' : '(確定値)'}\n\n`;
     csv += '商品別内訳(全販路)\n';
     csv += '商品,店舗本数,社員本数,EC本数,スクール本数,FC本数,合計本数,目標,達成率,売上,粗利\n';
-    PRODUCTS.forEach((p,i)=>{
-      const empUnits = Number(employeeData[i].units)||0;
-      const empPrice = Number(employeeData[i].price)||0;
-      const ecUnits = Number(ecData[i].units)||0;
-      const ecPrice = Number(ecData[i].price)||0;
-      const schoolUnits = Number(schoolData[i].units)||0;
-      const schoolPrice = Number(schoolData[i].price)||0;
-      const fcUnits = Number(fcData[i].units)||0;
-      const fcPrice = Number(fcData[i].price)||0;
-      const manualUnits = manualUnitsFor(p.name);
-      const combined = p.units + empUnits + ecUnits + schoolUnits + fcUnits + manualUnits;
-      const pct = (combined/p.target*100).toFixed(1);
-      const rev = storeRevenue(i) + empUnits*empPrice + ecUnits*ecPrice + schoolUnits*schoolPrice + fcUnits*fcPrice;
-      const prof = rev - combined*p.cost;
-      csv += `${p.name},${p.units},${empUnits},${ecUnits},${schoolUnits},${fcUnits},${combined},${p.target},${pct}%,${rev},${prof}\n`;
-    });
-    csv += `合計,,,,,,${totalUnits},${totalTarget},${overallPct.toFixed(1)}%,${autoRevenue},${autoRevenue-autoCost}\n\n`;
 
-    csv += '来店・販売率\n来店数,購入件数,販売率\n';
-    csv += `${visitTotal},${rawTotal},${(visitTotal>0?(rawTotal/visitTotal*100):0).toFixed(2)}%\n\n`;
+    let sumUnits=0, sumTarget=0, sumRevenue=0, sumCost=0;
 
-    const revItemsOut = currentLedgerView === 'all' ? ledger.revenueItems : ledger.revenueItems.filter(i=>i.product===currentLedgerView);
-    const costItemsOut = currentLedgerView === 'all' ? ledger.costItems : ledger.costItems.filter(i=>i.product===currentLedgerView);
+    if (isLiveMonth){
+      PRODUCTS.forEach((p,i)=>{
+        const empUnits = Number(employeeData[i].units)||0, empPrice = Number(employeeData[i].price)||0;
+        const ecUnits = Number(ecData[i].units)||0, ecPrice = Number(ecData[i].price)||0;
+        const schoolUnits = Number(schoolData[i].units)||0, schoolPrice = Number(schoolData[i].price)||0;
+        const fcUnits = Number(fcData[i].units)||0, fcPrice = Number(fcData[i].price)||0;
+        const manualUnits = manualUnitsFor(p.name);
+        const combined = p.units + empUnits + ecUnits + schoolUnits + fcUnits + manualUnits;
+        const rev = storeRevenue(i) + empUnits*empPrice + ecUnits*ecPrice + schoolUnits*schoolPrice + fcUnits*fcPrice;
+        const cost = combined*p.cost;
+        sumUnits+=combined; sumTarget+=p.target; sumRevenue+=rev; sumCost+=cost;
+        csv += `${p.name},${p.units},${empUnits},${ecUnits},${schoolUnits},${fcUnits},${combined},${p.target},${(combined/p.target*100).toFixed(1)}%,${rev},${cost}\n`;
+      });
+    } else if (isEditablePast){
+      PRODUCTS.forEach((p,i)=>{
+        const storeUnits = pastChannelData.storeUnits[i]||0;
+        const emp = pastChannelData.employee[i], ec = pastChannelData.ec[i], school = pastChannelData.school[i], fc = pastChannelData.fc[i];
+        const combined = storeUnits + emp.units + ec.units + school.units + fc.units;
+        let storeRev;
+        if (monthKey === '2026-09'){
+          const remaining = Math.max(0, storeUnits - SEPT_EARLY_UNITS[i]);
+          storeRev = SEPT_EARLY_REVENUE[i] + remaining * p.price;
+        } else { storeRev = storeUnits * p.price; }
+        const rev = storeRev + emp.units*emp.price + ec.units*ec.price + school.units*school.price + fc.units*fc.price;
+        const cost = combined*p.cost;
+        sumUnits+=combined; sumTarget+=p.target; sumRevenue+=rev; sumCost+=cost;
+        csv += `${p.name},${storeUnits},${emp.units},${ec.units},${school.units},${fc.units},${combined},${p.target},${(combined/p.target*100).toFixed(1)}%,${rev},${cost}\n`;
+      });
+    } else {
+      getMonthProductFigures(monthKey).forEach((d,i)=>{
+        sumUnits+=d.units; sumTarget+=PRODUCTS[i].target; sumRevenue+=d.revenue; sumCost+=d.cost;
+        csv += `${d.name},,,,,,${d.units},${PRODUCTS[i].target},${(d.units/PRODUCTS[i].target*100).toFixed(1)}%,${d.revenue},${d.cost}\n`;
+      });
+    }
+    csv += `合計,,,,,,${sumUnits},${sumTarget},${(sumUnits/sumTarget*100).toFixed(1)}%,${sumRevenue},${sumRevenue-sumCost}\n\n`;
 
-    csv += '収入内訳\n項目,対象商品,本数,金額\n';
-    csv += `商品売上(自動計算),${currentLedgerView==='all'?'全体':currentLedgerView},${totalUnits},${autoRevenue}\n`;
-    revItemsOut.forEach(i=>{ csv += `${i.label},${i.product==='all'?'全体(共通)':i.product},${i.units||0},${i.amount||0}\n`; });
-    csv += `収入合計,,,${revenueTotal}\n\n`;
+    if (isLiveMonth){
+      csv += '来店・販売率\n来店数,購入件数,販売率\n';
+      csv += `${visitTotal},${rawTotal},${(visitTotal>0?(rawTotal/visitTotal*100):0).toFixed(2)}%\n\n`;
+    } else if (isEditablePast){
+      const visit = pastChannelData.storeMeta.visit||0, raw = pastChannelData.storeMeta.raw||0;
+      csv += '来店・販売率\n来店数,購入件数,販売率\n';
+      csv += `${visit},${raw},${(visit>0?(raw/visit*100):0).toFixed(2)}%\n\n`;
+    }
 
-    csv += '支出内訳\n項目,対象商品,金額\n';
-    csv += `仕入れ原価(自動計算),${currentLedgerView==='all'?'全体':currentLedgerView},${autoCost}\n`;
-    costItemsOut.forEach(i=>{ csv += `${i.label},${i.product==='all'?'全体(共通)':i.product},${i.amount||0}\n`; });
-    csv += `支出合計,,${costTotal}\n\n`;
+    if (isLiveMonth || (monthKey >= LEDGER_START_MONTH)){
+      const { revenueTotal, costTotal, net } = computeTotals(currentLedgerView);
+      const revItemsOut = currentLedgerView === 'all' ? ledger.revenueItems : ledger.revenueItems.filter(i=>i.product===currentLedgerView);
+      const costItemsOut = currentLedgerView === 'all' ? ledger.costItems : ledger.costItems.filter(i=>i.product===currentLedgerView);
 
-    csv += `純利益,${net}\n`;
+      csv += '収入内訳(手入力)\n項目,対象商品,本数,金額\n';
+      revItemsOut.forEach(i=>{ csv += `${i.label},${i.product==='all'?'全体(共通)':i.product},${i.units||0},${i.amount||0}\n`; });
+      csv += '\n支出内訳(手入力)\n項目,対象商品,金額\n';
+      costItemsOut.forEach(i=>{ csv += `${i.label},${i.product==='all'?'全体(共通)':i.product},${i.amount||0}\n`; });
+      csv += `\n純利益(${currentLedgerView==='all'?'全体':currentLedgerView}・収支タブ基準),${net}\n`;
+    }
 
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'n-three_' + MONTH + '-' + String(TODAY_DAY).padStart(2,'0') + '.csv';
+    a.download = 'n-three_' + VIEW_MONTH + (VIEW_MONTH === MONTH ? ('-' + String(TODAY_DAY).padStart(2,'0')) : '') + '.csv';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -1984,6 +2015,8 @@
   document.getElementById('csvBtn').addEventListener('click', exportCsv);
   const csvBtn2 = document.getElementById('csvBtn2');
   if (csvBtn2) csvBtn2.addEventListener('click', exportCsv);
+  const csvBtn3 = document.getElementById('csvBtn3');
+  if (csvBtn3) csvBtn3.addEventListener('click', exportCsv);
 
   // ---- CSV upload: 店舗別CSVから本数・来店数・販売率を再集計 ----
   function n_(v){ const x = parseInt(v,10); return isNaN(x) ? 0 : x; }
