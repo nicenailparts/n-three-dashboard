@@ -237,7 +237,7 @@
     </div>
 
     <div class="note hidden" id="pastMonthNotice" style="margin-bottom:18px;">
-      過去の月(確定値)を表示しています。CSVアップロードや編集はできません。<span id="backToCurrentLink" style="text-decoration:underline; cursor:pointer; color:var(--ink);">今月に戻る</span>
+      過去の月(確定値)を表示しています。CSVアップロードや本数の編集はできませんが、「累計収支」タブの収入・支出項目は9月以降なら今から編集できます。<span id="backToCurrentLink" style="text-decoration:underline; cursor:pointer; color:var(--ink);">今月に戻る</span>
     </div>
 
     <div class="nav-tabs" id="navTabs">
@@ -439,6 +439,7 @@
 
   // ---- 月・日付は「今日」から自動で計算する(手動で書き換える必要はありません) ----
   const START_MONTH = '2026-07'; // 商品第一弾(美容液)の発売月。月選択ドロップダウンの起点
+  const LEDGER_START_MONTH = '2026-09'; // 月次収支(手入力)の記録が始まった月。これ以降は過去月でも編集可能
   function monthKeyOf(date){ return date.getFullYear() + '-' + String(date.getMonth()+1).padStart(2,'0'); }
   function daysInMonthOf(monthKey){
     const [y,m] = monthKey.split('-').map(Number);
@@ -539,6 +540,8 @@
   };
 
   let ledger = JSON.parse(JSON.stringify(DEFAULT_LEDGER));
+  let liveLedgerCache = { revenueItems: [], costItems: [] };
+  let viewedMonthAuto = null; // 過去月を編集中の時だけ使う、その月の自動集計(店舗+社員+EC+スクール+FC)のキャッシュ
 
   const yen = n => (n < 0 ? '-¥' : '¥') + Math.abs(Math.round(n)).toLocaleString('ja-JP');
   const num = n => Math.round(n).toLocaleString('ja-JP');
@@ -1129,15 +1132,18 @@
   }
 
   // ---- Ledger section (manual, persisted) ----
+  function ledgerMonth(){ return VIEW_MONTH; }
+
   async function loadLedger(){
+    const targetMonth = ledgerMonth();
     try{
-      const { data, error } = await db.from('n3_ledger_items').select('*').eq('month', MONTH).order('sort_order');
+      const { data, error } = await db.from('n3_ledger_items').select('*').eq('month', targetMonth).order('sort_order');
       if (error) throw error;
-      if (!data || data.length === 0){
-        // 初回のみ、サンプルの項目をSupabaseに登録しておく(全体・共通扱い)
+      if ((!data || data.length === 0) && targetMonth === MONTH){
+        // 初回のみ、サンプルの項目をSupabaseに登録しておく(全体・共通扱い)。過去月の編集では空のままにする
         const seedRows = [
-          ...DEFAULT_LEDGER.revenueItems.map((it,i) => ({ month: MONTH, item_type: 'revenue', label: it.label, units: it.units, amount: it.amount, sort_order: i, product: 'all' })),
-          ...DEFAULT_LEDGER.costItems.map((it,i) => ({ month: MONTH, item_type: 'cost', label: it.label, units: null, amount: it.amount, sort_order: i, product: 'all' })),
+          ...DEFAULT_LEDGER.revenueItems.map((it,i) => ({ month: targetMonth, item_type: 'revenue', label: it.label, units: it.units, amount: it.amount, sort_order: i, product: 'all' })),
+          ...DEFAULT_LEDGER.costItems.map((it,i) => ({ month: targetMonth, item_type: 'cost', label: it.label, units: null, amount: it.amount, sort_order: i, product: 'all' })),
         ];
         const { data: inserted, error: insErr } = await db.from('n3_ledger_items').insert(seedRows).select();
         if (insErr) throw insErr;
@@ -1149,13 +1155,14 @@
         });
       } else {
         ledger = { revenueItems: [], costItems: [] };
-        data.forEach(row => {
+        (data||[]).forEach(row => {
           const item = { id: row.id, label: row.label, units: row.units||0, amount: Number(row.amount)||0, product: row.product||'all' };
           if (row.item_type === 'revenue') ledger.revenueItems.push(item);
           else ledger.costItems.push(item);
         });
       }
     }catch(e){ console.error('月次収支の読み込みに失敗しました', e); }
+    if (targetMonth === MONTH) liveLedgerCache = ledger; // ライブ月を見ている間は常に同期させておく
     renderLedger();
   }
 
@@ -1165,12 +1172,13 @@
         label: item.label, units: item.units, amount: item.amount, product: item.product
       }).eq('id', item.id);
     }catch(e){ console.error('月次収支の保存に失敗しました', e); }
+    if (ledgerMonth() !== MONTH) await archiveSpecificMonth(ledgerMonth());
   }
 
   async function insertLedgerItem(type, sortOrder, product){
     try{
       const { data, error } = await db.from('n3_ledger_items').insert({
-        month: MONTH, item_type: type, label: '', units: type==='revenue' ? 0 : null, amount: 0, sort_order: sortOrder, product
+        month: ledgerMonth(), item_type: type, label: '', units: type==='revenue' ? 0 : null, amount: 0, sort_order: sortOrder, product
       }).select().single();
       if (error) throw error;
       return { id: data.id, label: '', units: 0, amount: 0, product };
@@ -1180,28 +1188,86 @@
   async function deleteLedgerItem(id){
     try{ await db.from('n3_ledger_items').delete().eq('id', id); }
     catch(e){ console.error('項目の削除に失敗しました', e); }
+    if (ledgerMonth() !== MONTH) await archiveSpecificMonth(ledgerMonth());
   }
 
   // ---- 月次収支の表示範囲(全体 / 商品別) ----
   let currentLedgerView = 'all';
   const PRODUCT_OPTIONS = ['all', ...PRODUCTS.map(p=>p.name)];
 
-  function autoFigures(view){
-    if (view === 'all') return { revenue: autoRevenue, cost: autoCost, units: totalUnits, label: '全体・店舗+社員' };
-    const idx = PRODUCTS.findIndex(p => p.name === view);
-    const p = PRODUCTS[idx];
-    const empUnits = Number(employeeData[idx].units)||0;
-    const empPrice = Number(employeeData[idx].price)||0;
-    const ecUnits = Number(ecData[idx].units)||0;
-    const ecPrice = Number(ecData[idx].price)||0;
-    const schoolUnits = Number(schoolData[idx].units)||0;
-    const schoolPrice = Number(schoolData[idx].price)||0;
-    const fcUnits = Number(fcData[idx].units)||0;
-    const fcPrice = Number(fcData[idx].price)||0;
-    const manualUnits = manualUnitsFor(view);
-    const combined = p.units + empUnits + ecUnits + schoolUnits + fcUnits + manualUnits;
-    return { revenue: storeRevenue(idx) + empUnits*empPrice + ecUnits*ecPrice + schoolUnits*schoolPrice + fcUnits*fcPrice, cost: combined*p.cost, units: combined, label: view + '・店舗+社員+EC+スクール+FC' };
+  async function getMonthAutoFigures(monthKey){
+    // 9月以降のある月の「自動計算(店舗+社員+EC+スクール+FC)」だけを取得する(手入力項目は含まない)
+    try{
+      const { data: uploads } = await db.from('n3_daily_uploads').select('*').eq('month', monthKey).order('day', { ascending: false }).limit(1);
+      const last = (uploads && uploads[0]) || null;
+      const monthUnits = last ? [last.serum_units, last.lotion_units, last.cleansing_units, last.cream_units] : [0,0,0,0];
+
+      const { data: empRows } = await db.from('n3_employee_sales').select('*').eq('month', monthKey);
+      const { data: ecRows } = await db.from('n3_ec_sales').select('*').eq('month', monthKey);
+      const { data: schoolRows } = await db.from('n3_school_sales').select('*').eq('month', monthKey);
+      const { data: fcRows } = await db.from('n3_fc_sales').select('*').eq('month', monthKey);
+      const byProduct = rows => { const m={}; (rows||[]).forEach(r=>m[r.product]=r); return m; };
+      const empByProduct = byProduct(empRows), ecByProduct = byProduct(ecRows);
+      const schoolByProduct = byProduct(schoolRows), fcByProduct = byProduct(fcRows);
+
+      const perProduct = PRODUCTS.map((p,i) => {
+        const emp = empByProduct[p.name] || { units:0, price:770 };
+        const ec = ecByProduct[p.name] || { units:0, price:990 };
+        const school = schoolByProduct[p.name] || { units:0, price:990 };
+        const fc = fcByProduct[p.name] || { units:0, price:990 };
+        const empUnits = Number(emp.units)||0, empPrice = Number(emp.price)||0;
+        const ecUnits = Number(ec.units)||0, ecPrice = Number(ec.price)||0;
+        const schoolUnits = Number(school.units)||0, schoolPrice = Number(school.price)||0;
+        const fcUnits = Number(fc.units)||0, fcPrice = Number(fc.price)||0;
+        const combined = monthUnits[i] + empUnits + ecUnits + schoolUnits + fcUnits;
+        let storeRev;
+        if (monthKey === '2026-09'){
+          const remaining = Math.max(0, monthUnits[i] - SEPT_EARLY_UNITS[i]);
+          storeRev = SEPT_EARLY_REVENUE[i] + remaining * p.price;
+        } else {
+          storeRev = monthUnits[i] * p.price;
+        }
+        const revenue = storeRev + empUnits*empPrice + ecUnits*ecPrice + schoolUnits*schoolPrice + fcUnits*fcPrice;
+        const cost = combined * p.cost;
+        return { units: combined, revenue, cost };
+      });
+      return { perProduct };
+    }catch(e){
+      console.error('月次自動集計の取得に失敗しました', e);
+      return { perProduct: PRODUCTS.map(()=>({units:0, revenue:0, cost:0})) };
+    }
   }
+
+  function autoFigures(view){
+    if (ledgerMonth() === MONTH){
+      // ライブの月は常に最新のその場計算を使う
+      if (view === 'all') return { revenue: autoRevenue, cost: autoCost, units: totalUnits, label: '全体・店舗+社員+EC+スクール+FC' };
+      const idx = PRODUCTS.findIndex(p => p.name === view);
+      const p = PRODUCTS[idx];
+      const empUnits = Number(employeeData[idx].units)||0;
+      const empPrice = Number(employeeData[idx].price)||0;
+      const ecUnits = Number(ecData[idx].units)||0;
+      const ecPrice = Number(ecData[idx].price)||0;
+      const schoolUnits = Number(schoolData[idx].units)||0;
+      const schoolPrice = Number(schoolData[idx].price)||0;
+      const fcUnits = Number(fcData[idx].units)||0;
+      const fcPrice = Number(fcData[idx].price)||0;
+      const manualUnits = manualUnitsFor(view);
+      const combined = p.units + empUnits + ecUnits + schoolUnits + fcUnits + manualUnits;
+      return { revenue: storeRevenue(idx) + empUnits*empPrice + ecUnits*ecPrice + schoolUnits*schoolPrice + fcUnits*fcPrice, cost: combined*p.cost, units: combined, label: view + '・店舗+社員+EC+スクール+FC' };
+    }
+    // 過去の月を編集中は、読み込み済みのキャッシュを使う
+    if (!viewedMonthAuto) return { revenue: 0, cost: 0, units: 0, label: view + '(読み込み中)' };
+    if (view === 'all'){
+      let revenue=0, cost=0, units=0;
+      viewedMonthAuto.perProduct.forEach(f => { revenue+=f.revenue; cost+=f.cost; units+=f.units; });
+      return { revenue, cost, units, label: '全体・店舗+社員+EC+スクール+FC' };
+    }
+    const idx = PRODUCTS.findIndex(p => p.name === view);
+    const f = viewedMonthAuto.perProduct[idx];
+    return { revenue: f.revenue, cost: f.cost, units: f.units, label: view + '・店舗+社員+EC+スクール+FC' };
+  }
+
 
   function computeTotals(view){
     view = view || currentLedgerView;
@@ -1291,15 +1357,26 @@
     };
   }
 
+  function liveManualLedgerFor(tag){
+    // 過去月をUI上で編集中でも、ここは必ず「今のライブ月」のキャッシュを見る(二重計上・取りこぼし防止)
+    const source = (ledgerMonth() === MONTH) ? ledger : liveLedgerCache;
+    const revItems = source.revenueItems.filter(i => i.product === tag);
+    const costItems = source.costItems.filter(i => i.product === tag);
+    return {
+      revenue: revItems.reduce((s,i)=>s+(Number(i.amount)||0),0),
+      cost: costItems.reduce((s,i)=>s+(Number(i.amount)||0),0),
+    };
+  }
+
   function computeLifetime(view){
     if (view === 'all'){
       let revenue = 0, cost = 0, units = 0;
       PRODUCTS.forEach((p,i) => {
         const f = lifetimeFiguresForProduct(i);
-        const manual = manualLedgerFor(p.name);
+        const manual = liveManualLedgerFor(p.name);
         revenue += f.revenue + manual.revenue; cost += f.cost + manual.cost; units += f.units;
       });
-      const common = manualLedgerFor('all'); // 今ライブ中の月の共通費用
+      const common = liveManualLedgerFor('all'); // 今ライブ中の月の共通費用
       revenue += common.revenue; cost += common.cost;
       Object.keys(monthlyProductSummary).forEach(monthKey => {
         if (monthKey === MONTH) return;
@@ -1310,7 +1387,7 @@
     }
     const idx = PRODUCTS.findIndex(p => p.name === view);
     const f = lifetimeFiguresForProduct(idx);
-    const manual = manualLedgerFor(view);
+    const manual = liveManualLedgerFor(view);
     const revenue = f.revenue + manual.revenue, cost = f.cost + manual.cost;
     return { revenue, cost, profit: revenue-cost, units: f.units };
   }
@@ -1358,79 +1435,83 @@
 
   // 月が切り替わったタイミングで、前月までにライブ追跡していた月(CSVアップロード履歴がある月)を
   // 自動で「確定値」としてn3_monthly_product_summaryに保存する。7月・8月のように手動登録済みの月は上書きしない。
+  async function archiveSpecificMonth(monthKey){
+    try{
+      const { data: uploads, error: upErr } = await db.from('n3_daily_uploads').select('*').eq('month', monthKey).order('day', { ascending: false }).limit(1);
+      if (upErr) throw upErr;
+      if (!uploads || uploads.length === 0) return false; // その月のアップロード履歴が無ければ何もしない
+
+      const last = uploads[0];
+      const monthUnits = [last.serum_units, last.lotion_units, last.cleansing_units, last.cream_units];
+
+      const { data: empRows } = await db.from('n3_employee_sales').select('*').eq('month', monthKey);
+      const empByProduct = {};
+      (empRows||[]).forEach(r => { empByProduct[r.product] = r; });
+
+      const { data: ecRows } = await db.from('n3_ec_sales').select('*').eq('month', monthKey);
+      const ecByProduct = {};
+      (ecRows||[]).forEach(r => { ecByProduct[r.product] = r; });
+
+      const { data: schoolRows } = await db.from('n3_school_sales').select('*').eq('month', monthKey);
+      const schoolByProduct = {};
+      (schoolRows||[]).forEach(r => { schoolByProduct[r.product] = r; });
+
+      const { data: fcRows } = await db.from('n3_fc_sales').select('*').eq('month', monthKey);
+      const fcByProduct = {};
+      (fcRows||[]).forEach(r => { fcByProduct[r.product] = r; });
+
+      const { data: ledgerRows } = await db.from('n3_ledger_items').select('*').eq('month', monthKey);
+      const ledgerByProduct = {};
+      let commonRevenue = 0, commonCost = 0;
+      (ledgerRows||[]).forEach(r => {
+        const amt = Number(r.amount)||0;
+        if (r.product === 'all'){
+          if (r.item_type === 'revenue') commonRevenue += amt; else commonCost += amt;
+        } else {
+          if (!ledgerByProduct[r.product]) ledgerByProduct[r.product] = { revenue: 0, cost: 0 };
+          if (r.item_type === 'revenue') ledgerByProduct[r.product].revenue += amt; else ledgerByProduct[r.product].cost += amt;
+        }
+      });
+
+      const rows = PRODUCTS.map((p,i) => {
+        const emp = empByProduct[p.name] || { units: 0, price: 770 };
+        const empUnits = Number(emp.units)||0, empPrice = Number(emp.price)||0;
+        const ec = ecByProduct[p.name] || { units: 0, price: 990 };
+        const ecUnits = Number(ec.units)||0, ecPrice = Number(ec.price)||0;
+        const school = schoolByProduct[p.name] || { units: 0, price: 990 };
+        const schoolUnits = Number(school.units)||0, schoolPrice = Number(school.price)||0;
+        const fc = fcByProduct[p.name] || { units: 0, price: 990 };
+        const fcUnits = Number(fc.units)||0, fcPrice = Number(fc.price)||0;
+        const manual = ledgerByProduct[p.name] || { revenue: 0, cost: 0 };
+        const combined = monthUnits[i] + empUnits + ecUnits + schoolUnits + fcUnits;
+        let storeRev;
+        if (monthKey === '2026-09'){
+          // 9月は価格改定(9/5〜990円)をまたぐため、9/1〜9/4分だけ旧単価で計算する
+          const remaining = Math.max(0, monthUnits[i] - SEPT_EARLY_UNITS[i]);
+          storeRev = SEPT_EARLY_REVENUE[i] + remaining * p.price;
+        } else {
+          storeRev = monthUnits[i]*p.price;
+        }
+        const revenue = storeRev + empUnits*empPrice + ecUnits*ecPrice + schoolUnits*schoolPrice + fcUnits*fcPrice + manual.revenue;
+        const cost = combined * p.cost + manual.cost;
+        return { month: monthKey, product: p.name, units: combined, revenue, cost };
+      });
+      rows.push({ month: monthKey, product: '__common__', units: 0, revenue: commonRevenue, cost: commonCost });
+
+      const { error: insErr } = await db.from('n3_monthly_product_summary').upsert(rows, { onConflict: 'month,product' });
+      if (insErr) throw insErr;
+
+      monthlyProductSummary[monthKey] = {};
+      rows.forEach(r => { monthlyProductSummary[monthKey][r.product] = { units: r.units, revenue: r.revenue, cost: r.cost }; });
+      return true;
+    }catch(e){ console.error(monthKey + 'の確定値作成に失敗しました', e); return false; }
+  }
+
   async function archivePastMonths(){
     for (const m of PERIOD_MONTHS){
       if (m.key === MONTH) continue; // 今ライブ追跡中の月は対象外
       if (monthlyProductSummary[m.key]) continue; // 既に確定値がある月(7月・8月含む)はそのまま
-
-      try{
-        const { data: uploads, error: upErr } = await db.from('n3_daily_uploads').select('*').eq('month', m.key).order('day', { ascending: false }).limit(1);
-        if (upErr) throw upErr;
-        if (!uploads || uploads.length === 0) continue; // その月のアップロード履歴が無ければスキップ
-
-        const last = uploads[0];
-        const monthUnits = [last.serum_units, last.lotion_units, last.cleansing_units, last.cream_units];
-
-        const { data: empRows } = await db.from('n3_employee_sales').select('*').eq('month', m.key);
-        const empByProduct = {};
-        (empRows||[]).forEach(r => { empByProduct[r.product] = r; });
-
-        const { data: ecRows } = await db.from('n3_ec_sales').select('*').eq('month', m.key);
-        const ecByProduct = {};
-        (ecRows||[]).forEach(r => { ecByProduct[r.product] = r; });
-
-        const { data: schoolRows } = await db.from('n3_school_sales').select('*').eq('month', m.key);
-        const schoolByProduct = {};
-        (schoolRows||[]).forEach(r => { schoolByProduct[r.product] = r; });
-
-        const { data: fcRows } = await db.from('n3_fc_sales').select('*').eq('month', m.key);
-        const fcByProduct = {};
-        (fcRows||[]).forEach(r => { fcByProduct[r.product] = r; });
-
-        const { data: ledgerRows } = await db.from('n3_ledger_items').select('*').eq('month', m.key);
-        const ledgerByProduct = {};
-        let commonRevenue = 0, commonCost = 0;
-        (ledgerRows||[]).forEach(r => {
-          const amt = Number(r.amount)||0;
-          if (r.product === 'all'){
-            if (r.item_type === 'revenue') commonRevenue += amt; else commonCost += amt;
-          } else {
-            if (!ledgerByProduct[r.product]) ledgerByProduct[r.product] = { revenue: 0, cost: 0 };
-            if (r.item_type === 'revenue') ledgerByProduct[r.product].revenue += amt; else ledgerByProduct[r.product].cost += amt;
-          }
-        });
-
-        const rows = PRODUCTS.map((p,i) => {
-          const emp = empByProduct[p.name] || { units: 0, price: 770 };
-          const empUnits = Number(emp.units)||0, empPrice = Number(emp.price)||0;
-          const ec = ecByProduct[p.name] || { units: 0, price: 990 };
-          const ecUnits = Number(ec.units)||0, ecPrice = Number(ec.price)||0;
-          const school = schoolByProduct[p.name] || { units: 0, price: 990 };
-          const schoolUnits = Number(school.units)||0, schoolPrice = Number(school.price)||0;
-          const fc = fcByProduct[p.name] || { units: 0, price: 990 };
-          const fcUnits = Number(fc.units)||0, fcPrice = Number(fc.price)||0;
-          const manual = ledgerByProduct[p.name] || { revenue: 0, cost: 0 };
-          const combined = monthUnits[i] + empUnits + ecUnits + schoolUnits + fcUnits;
-          let storeRev;
-          if (m.key === '2026-09'){
-            // 9月は価格改定(9/5〜990円)をまたぐため、9/1〜9/4分だけ旧単価で計算する
-            const remaining = Math.max(0, monthUnits[i] - SEPT_EARLY_UNITS[i]);
-            storeRev = SEPT_EARLY_REVENUE[i] + remaining * p.price;
-          } else {
-            storeRev = monthUnits[i]*p.price;
-          }
-          const revenue = storeRev + empUnits*empPrice + ecUnits*ecPrice + schoolUnits*schoolPrice + fcUnits*fcPrice + manual.revenue;
-          const cost = combined * p.cost + manual.cost;
-          return { month: m.key, product: p.name, units: combined, revenue, cost };
-        });
-        rows.push({ month: m.key, product: '__common__', units: 0, revenue: commonRevenue, cost: commonCost });
-
-        const { error: insErr } = await db.from('n3_monthly_product_summary').upsert(rows, { onConflict: 'month,product' });
-        if (insErr) throw insErr;
-
-        monthlyProductSummary[m.key] = {};
-        rows.forEach(r => { monthlyProductSummary[m.key][r.product] = { units: r.units, revenue: r.revenue, cost: r.cost }; });
-      }catch(e){ console.error(m.key + 'の確定値作成に失敗しました', e); }
+      await archiveSpecificMonth(m.key);
     }
   }
 
@@ -1498,8 +1579,9 @@
     document.getElementById('pastLedgerSub').textContent = (info ? info.label : VIEW_MONTH) + 'の商品売上合計(店舗+社員)';
   }
 
-  function applyViewMonth(){
+  async function applyViewMonth(){
     const isLive = VIEW_MONTH === MONTH;
+    const isEditableLedger = VIEW_MONTH >= LEDGER_START_MONTH;
     const info = PERIOD_MONTHS.find(m => m.key === VIEW_MONTH);
     document.getElementById('periodLabel').textContent = (info ? info.label : VIEW_MONTH) + (isLive ? '度' : '');
     document.querySelectorAll('.period-option').forEach(o => o.classList.toggle('active', o.dataset.month === VIEW_MONTH));
@@ -1508,13 +1590,21 @@
     document.getElementById('pastMonthNotice').classList.toggle('hidden', isLive);
     document.getElementById('liveProductsView').classList.toggle('hidden', !isLive);
     document.getElementById('pastProductsView').classList.toggle('hidden', isLive);
-    document.getElementById('liveLedgerView').classList.toggle('hidden', !isLive);
-    document.getElementById('pastLedgerView').classList.toggle('hidden', isLive);
+    document.getElementById('liveLedgerView').classList.toggle('hidden', !isEditableLedger);
+    document.getElementById('pastLedgerView').classList.toggle('hidden', isEditableLedger);
 
     if (isLive){
       drawTrendChart(currentView);
     } else {
       renderPastProductsView();
+    }
+
+    if (isEditableLedger){
+      if (!isLive){
+        viewedMonthAuto = await getMonthAutoFigures(VIEW_MONTH); // 過去月の店舗+社員+EC+スクール+FCを取得
+      }
+      await loadLedger(); // ledgerMonth()(=VIEW_MONTH)の収支をその場で読み込み、編集可能にする
+    } else {
       renderPastLedgerView();
     }
   }
@@ -1726,7 +1816,13 @@
     return m ? parseInt(m[1],10) : null;
   }
 
-  function applyParsedRows(rows, day){
+  function tryExtractMonthDay(filename){
+    const m = filename.match(/(\d{4})-(\d{2})-(\d{2})/);
+    if (!m) return null;
+    return { month: m[1] + '-' + m[2], day: parseInt(m[3],10) };
+  }
+
+  function parseCsvRows(rows){
     // CSVの末尾にある「全店合計」行(店舗名が空欄)は除外する。含めると数字が丸ごと2倍になる。
     rows = rows.filter(row => row[COLS.store] && row[COLS.store].trim() !== '');
     let serum=0, lotion=0, cleansing=0, cream=0, bundle=0, visit=0, raw=0;
@@ -1742,6 +1838,11 @@
     });
     // セット購入(美容液＆化粧水)は各1本ずつ加算した「今月累計」として履歴に保存
     const windowUnits = [serum + bundle, lotion + bundle, cleansing, cream];
+    return { windowUnits, visit, raw, bundle };
+  }
+
+  function applyParsedRows(rows, day){
+    const { windowUnits, visit, raw, bundle } = parseCsvRows(rows);
     uploadHistory = uploadHistory.filter(e => e.day !== day);
     uploadHistory.push({ day, units: windowUnits, visit, raw, bundle });
     uploadHistory.sort((a,b) => a.day - b.day);
@@ -1757,7 +1858,7 @@
     selectView(currentView);
     renderSalesRate();
     renderLedger();
-    saveDailyUpload(day, windowUnits, visit, raw, bundle);
+    saveDailyUpload(MONTH, day, windowUnits, visit, raw, bundle);
     saveMonthlySnapshot();
   }
 
@@ -1766,11 +1867,29 @@
     if (!file) return;
     const status = document.getElementById('uploadStatus');
     status.textContent = '読み込み中…';
-    const day = tryExtractDay(file.name) || TODAY_DAY;
+    const extracted = tryExtractMonthDay(file.name);
+
     Papa.parse(file, {
       header: true,
       skipEmptyLines: true,
-      complete: (results) => {
+      complete: async (results) => {
+        if (extracted && extracted.month !== MONTH){
+          // 違う月のCSV(レポートの1日遅れなどで、前月分を後から修正したい場合)
+          const isKnownMonth = PERIOD_MONTHS.some(m => m.key === extracted.month);
+          if (!isKnownMonth){
+            status.textContent = '対応していない月のファイルです: ' + file.name;
+            return;
+          }
+          const { windowUnits, visit, raw, bundle } = parseCsvRows(results.data);
+          await saveDailyUpload(extracted.month, extracted.day, windowUnits, visit, raw, bundle);
+          const ok = await archiveSpecificMonth(extracted.month);
+          if (ok && VIEW_MONTH === extracted.month) renderPastProductsView();
+          status.textContent = ok
+            ? (extracted.month + 'の確定値を修正しました: ' + file.name)
+            : (extracted.month + 'の修正に失敗しました');
+          return;
+        }
+        const day = (extracted ? extracted.day : null) || TODAY_DAY;
         TODAY_DAY = day;
         applyParsedRows(results.data, day);
         renderHeaderLine();
@@ -1784,10 +1903,10 @@
   });
 
   // ---- Persistence(Supabase) ----
-  async function saveDailyUpload(day, units, visit, raw, bundle){
+  async function saveDailyUpload(monthKey, day, units, visit, raw, bundle){
     try{
       const { error } = await db.from('n3_daily_uploads').upsert({
-        month: MONTH, day,
+        month: monthKey, day,
         serum_units: units[0], lotion_units: units[1], cleansing_units: units[2], cream_units: units[3],
         bundle_count: bundle, visit_total: visit, raw_total: raw
       }, { onConflict: 'month,day' });
