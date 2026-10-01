@@ -212,6 +212,15 @@
     .stat-grid{ grid-template-columns:1fr; }
     .ledger-row-main, .ledger-row.total{ grid-template-columns:1fr 55px 90px 24px; }
   }
+
+  .channel-edit-row{ display:flex; gap:10px; flex-wrap:wrap; margin-top:8px; }
+  .channel-edit-field{ display:flex; flex-direction:column; gap:3px; }
+  .channel-edit-field label{ font-size:10.5px; color:var(--ink-faint); }
+  .channel-edit-field input{
+    width:66px; border:1px solid var(--border); border-radius:6px; padding:5px 7px;
+    font-size:13px; font-variant-numeric:tabular-nums; font-family:inherit;
+  }
+  .channel-edit-field input:focus{ outline:none; border-color:var(--ink-faint); background:var(--track); }
 </style>
 </head>
 <body>
@@ -368,8 +377,35 @@
       <div class="hidden" id="pastProductsView">
         <div class="section-row">
           <div class="section-label" id="pastProductsLabel">2026年7月</div>
-          <div class="section-note">確定値(過去のCSVより)</div>
+          <div class="section-note" id="pastProductsNote">確定値(過去のCSVより)</div>
         </div>
+
+        <div class="stat-grid">
+          <div class="stat-card">
+            <div class="stat-label">販売本数(全体)</div>
+            <div class="stat-value" id="pastStatUnits">—</div>
+          </div>
+          <div class="stat-card dark">
+            <div class="stat-label">目標達成率</div>
+            <div class="stat-value" id="pastStatPct">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">売上</div>
+            <div class="stat-value" id="pastStatRevenue">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">粗利</div>
+            <div class="stat-value" id="pastStatProfit">—</div>
+          </div>
+          <div class="stat-card" style="grid-column: span 2;" id="pastStatRateCard">
+            <div class="stat-label">来店数に対する販売率</div>
+            <div style="display:flex; align-items:baseline; gap:12px;">
+              <div class="stat-value" id="pastStatRate">—</div>
+              <div style="font-size:12px; color:var(--ink-soft);">来店 <span id="pastStatVisit">—</span></div>
+            </div>
+          </div>
+        </div>
+
         <div class="product-list" id="pastProductsList"></div>
         <div class="stat-card" style="margin-top:10px;">
           <div class="stat-label">この月の合計</div>
@@ -1515,15 +1551,71 @@
     }
   }
 
-  function appendHistoryRow(listEl, name, units, revenue, cost){
+  // ---- 過去月の本数を直接修正する仕組み(ライブ月のデータには一切触れない、独立した状態) ----
+  let pastChannelData = null; // { storeUnits:[4], storeDay, storeMeta:{visit,raw,bundle}, employee:[4], ec:[4], school:[4], fc:[4] }
+
+  async function fetchChannelForMonth(table, monthKey, defPrice){
+    try{
+      const { data } = await db.from(table).select('*').eq('month', monthKey);
+      return PRODUCTS.map(p => {
+        const row = (data||[]).find(r => r.product === p.name);
+        return { units: row ? Number(row.units)||0 : 0, price: row ? Number(row.price)||defPrice : defPrice };
+      });
+    }catch(e){ console.error(table+'の読み込みに失敗しました', e); return PRODUCTS.map(()=>({units:0, price:defPrice})); }
+  }
+
+  async function loadPastChannelData(monthKey){
+    let storeUnits = [0,0,0,0], storeDay = null, storeMeta = { visit:0, raw:0, bundle:0 };
+    try{
+      const { data: uploads } = await db.from('n3_daily_uploads').select('*').eq('month', monthKey).order('day', { ascending: false }).limit(1);
+      const last = (uploads && uploads[0]) || null;
+      if (last){
+        storeUnits = [last.serum_units, last.lotion_units, last.cleansing_units, last.cream_units];
+        storeDay = last.day;
+        storeMeta = { visit: last.visit_total||0, raw: last.raw_total||0, bundle: last.bundle_count||0 };
+      }
+    }catch(e){ console.error('店舗本数の読み込みに失敗しました', e); }
+
+    const [employee, ec, school, fc] = await Promise.all([
+      fetchChannelForMonth('n3_employee_sales', monthKey, 770),
+      fetchChannelForMonth('n3_ec_sales', monthKey, 990),
+      fetchChannelForMonth('n3_school_sales', monthKey, 990),
+      fetchChannelForMonth('n3_fc_sales', monthKey, 770),
+    ]);
+    pastChannelData = { storeUnits, storeDay, storeMeta, employee, ec, school, fc };
+  }
+
+  async function savePastStoreUnits(monthKey){
+    const day = pastChannelData.storeDay || daysInMonthOf(monthKey); // 元の記録が無ければ月末日扱いで保存
+    pastChannelData.storeDay = day;
+    await saveDailyUpload(monthKey, day, pastChannelData.storeUnits, pastChannelData.storeMeta.visit, pastChannelData.storeMeta.raw, pastChannelData.storeMeta.bundle);
+    await archiveSpecificMonth(monthKey);
+    renderPastProductsView();
+  }
+
+  async function savePastChannelItem(table, monthKey, idx, item){
+    try{
+      await db.from(table).upsert({ month: monthKey, product: PRODUCTS[idx].name, price: item.price, units: item.units }, { onConflict: 'month,product' });
+    }catch(e){ console.error(table+'の保存に失敗しました', e); }
+    await archiveSpecificMonth(monthKey);
+    renderPastProductsView();
+  }
+
+  function appendHistoryRow(listEl, name, units, revenue, cost, target){
     const profit = revenue - cost;
+    const pct = target ? (units / target) * 100 : null;
     const row = document.createElement('div');
     row.className = 'product-row';
     row.innerHTML = `
       <div class="product-row-top">
         <div class="product-name">${name}</div>
-        <div class="product-units">${num(units)}本</div>
+        <div class="product-units">${num(units)}本${target ? ' / ' + num(target) + '本' : ''}</div>
       </div>
+      ${pct !== null ? `
+      <div class="product-progress-row">
+        <div class="product-track"><div class="product-fill" style="width:${Math.min(pct,100)}%"></div></div>
+        <div class="product-pct">${pct.toFixed(0)}%</div>
+      </div>` : ''}
       <div class="product-meta">
         <span>売上 <b>${yen(revenue)}</b></span>
         <span>原価 <b>${yen(cost)}</b></span>
@@ -1563,10 +1655,95 @@
     const listEl = document.getElementById('pastProductsList');
     listEl.innerHTML = '';
     let totalRevenue = 0, totalCost = 0, totalUnitsM = 0;
-    getMonthProductFigures(VIEW_MONTH).forEach(d => {
-      totalRevenue += d.revenue; totalCost += d.cost; totalUnitsM += d.units;
-      appendHistoryRow(listEl, d.name, d.units, d.revenue, d.cost);
-    });
+
+    const editable = VIEW_MONTH >= LEDGER_START_MONTH && pastChannelData;
+    document.getElementById('pastProductsNote').textContent = editable ? '本数を直接修正できます' : '確定値(過去のCSVより・本数は編集できません)';
+
+    if (!editable){
+      getMonthProductFigures(VIEW_MONTH).forEach((d,i) => {
+        totalRevenue += d.revenue; totalCost += d.cost; totalUnitsM += d.units;
+        appendHistoryRow(listEl, d.name, d.units, d.revenue, d.cost, PRODUCTS[i].target);
+      });
+      document.getElementById('pastStatRateCard').style.opacity = '0.4';
+      document.getElementById('pastStatRate').textContent = 'データなし';
+      document.getElementById('pastStatVisit').textContent = '—';
+    } else {
+      PRODUCTS.forEach((p,i) => {
+        const storeUnits = pastChannelData.storeUnits[i]||0;
+        const emp = pastChannelData.employee[i], ec = pastChannelData.ec[i];
+        const school = pastChannelData.school[i], fc = pastChannelData.fc[i];
+        const combined = storeUnits + emp.units + ec.units + school.units + fc.units;
+        let storeRev;
+        if (VIEW_MONTH === '2026-09'){
+          const remaining = Math.max(0, storeUnits - SEPT_EARLY_UNITS[i]);
+          storeRev = SEPT_EARLY_REVENUE[i] + remaining * p.price;
+        } else {
+          storeRev = storeUnits * p.price;
+        }
+        const revenue = storeRev + emp.units*emp.price + ec.units*ec.price + school.units*school.price + fc.units*fc.price;
+        const cost = combined * p.cost;
+        totalRevenue += revenue; totalCost += cost; totalUnitsM += combined;
+        const pct = (combined / p.target) * 100;
+
+        const row = document.createElement('div');
+        row.className = 'product-row';
+        row.innerHTML = `
+          <div class="product-row-top">
+            <div class="product-name">${p.name}</div>
+            <div class="product-units">${num(combined)} / ${num(p.target)}本</div>
+          </div>
+          <div class="product-progress-row">
+            <div class="product-track"><div class="product-fill" style="width:${Math.min(pct,100)}%"></div></div>
+            <div class="product-pct">${pct.toFixed(0)}%</div>
+          </div>
+          <div class="product-meta">
+            <span>売上 <b>${yen(revenue)}</b></span>
+            <span>原価 <b>${yen(cost)}</b></span>
+            <span>粗利 <b class="${(revenue-cost)<0?'neg':''}">${yen(revenue-cost)}</b></span>
+          </div>
+          <div class="channel-edit-row">
+            <div class="channel-edit-field"><label>店舗</label><input type="number" class="ch-store" value="${storeUnits}"></div>
+            <div class="channel-edit-field"><label>社員</label><input type="number" class="ch-emp" value="${emp.units}"></div>
+            <div class="channel-edit-field"><label>EC</label><input type="number" class="ch-ec" value="${ec.units}"></div>
+            <div class="channel-edit-field"><label>スクール</label><input type="number" class="ch-school" value="${school.units}"></div>
+            <div class="channel-edit-field"><label>FC</label><input type="number" class="ch-fc" value="${fc.units}"></div>
+          </div>
+        `;
+        row.querySelector('.ch-store').addEventListener('change', (e) => {
+          pastChannelData.storeUnits[i] = Number(e.target.value)||0;
+          savePastStoreUnits(VIEW_MONTH);
+        });
+        row.querySelector('.ch-emp').addEventListener('change', (e) => {
+          emp.units = Number(e.target.value)||0;
+          savePastChannelItem('n3_employee_sales', VIEW_MONTH, i, emp);
+        });
+        row.querySelector('.ch-ec').addEventListener('change', (e) => {
+          ec.units = Number(e.target.value)||0;
+          savePastChannelItem('n3_ec_sales', VIEW_MONTH, i, ec);
+        });
+        row.querySelector('.ch-school').addEventListener('change', (e) => {
+          school.units = Number(e.target.value)||0;
+          savePastChannelItem('n3_school_sales', VIEW_MONTH, i, school);
+        });
+        row.querySelector('.ch-fc').addEventListener('change', (e) => {
+          fc.units = Number(e.target.value)||0;
+          savePastChannelItem('n3_fc_sales', VIEW_MONTH, i, fc);
+        });
+        listEl.appendChild(row);
+      });
+
+      const visit = pastChannelData.storeMeta.visit||0;
+      const raw = pastChannelData.storeMeta.raw||0;
+      document.getElementById('pastStatRateCard').style.opacity = '1';
+      document.getElementById('pastStatRate').textContent = (visit>0 ? (raw/visit*100) : 0).toFixed(2) + '%';
+      document.getElementById('pastStatVisit').textContent = num(visit) + '人';
+    }
+
+    const totalTargetM = PRODUCTS.reduce((s,p)=>s+p.target,0);
+    document.getElementById('pastStatUnits').innerHTML = num(totalUnitsM) + '<span class="unit"> / ' + num(totalTargetM) + '本</span>';
+    document.getElementById('pastStatPct').textContent = (totalUnitsM/totalTargetM*100).toFixed(1) + '%';
+    document.getElementById('pastStatRevenue').textContent = yen(totalRevenue);
+    document.getElementById('pastStatProfit').textContent = yen(totalRevenue-totalCost);
     document.getElementById('pastProductsRevenue').textContent = yen(totalRevenue);
     document.getElementById('pastProductsSub').textContent =
       '本数 ' + num(totalUnitsM) + '本 ・ 原価 ' + yen(totalCost) + ' ・ 粗利 ' + yen(totalRevenue-totalCost);
@@ -1596,6 +1773,7 @@
     if (isLive){
       drawTrendChart(currentView);
     } else {
+      if (VIEW_MONTH >= LEDGER_START_MONTH) await loadPastChannelData(VIEW_MONTH);
       renderPastProductsView();
     }
 
