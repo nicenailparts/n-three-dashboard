@@ -262,6 +262,7 @@
         <div class="stat-card">
           <div class="stat-label" id="unitsLabel">販売本数</div>
           <div class="stat-value" id="statUnits">—</div>
+          <div class="stat-sub" id="statUnitsSub"></div>
         </div>
         <div class="stat-card dark">
           <div class="stat-label">目標達成率</div>
@@ -388,6 +389,7 @@
           <div class="stat-card">
             <div class="stat-label">販売本数(全体)</div>
             <div class="stat-value" id="pastStatUnits">—</div>
+            <div class="stat-sub" id="pastStatUnitsSub"></div>
           </div>
           <div class="stat-card dark">
             <div class="stat-label">目標達成率</div>
@@ -510,6 +512,8 @@
   // 差額は通常価格の比率で3商品に按分し、合計が1パスあたり2,990円ちょうどになるようにする。
   const STARTER_PASS_PRICE = 2990;
   const STARTER_ITEMS = [0, 1, 3]; // 美容液, 化粧水, クリーム
+  // スターターパス由来の本数(美容液・化粧水・クリームに各1本)。クレンジングは対象外。
+  function starterUnitsFor(i, count){ return (count && STARTER_ITEMS.indexOf(i) >= 0) ? count : 0; }
   function starterRevenueAdj(i, count){
     if (!count || STARTER_ITEMS.indexOf(i) < 0) return 0;
     const regular = STARTER_ITEMS.reduce((s,idx) => s + PRODUCTS[idx].price, 0);
@@ -1112,7 +1116,8 @@
         </div>
         <div class="product-meta">
           <span><span class="pace-dot ${onPace ? '' : 'behind'}"></span>${onPace ? '順調' : 'やや遅れ'}</span>
-          <span>店舗 <b>${num(p.units)}本</b></span>
+          <span>店舗 <b>${num(Math.max(0, p.units - starterUnitsFor(i, starterCount)))}本</b></span>
+          ${starterUnitsFor(i, starterCount) > 0 ? `<span>パス <b>${num(starterUnitsFor(i, starterCount))}本</b></span>` : ''}
           <span>社員 <b>${num(empUnits)}本</b></span>
           <span>EC <b>${num(ecUnits)}本</b></span>
           <span>スクール <b>${num(schoolUnits)}本</b></span>
@@ -1160,7 +1165,9 @@
       manualRev += common.revenue; manualCost += common.cost;
       revenue = autoRevenue + manualRev;
       profit = revenue - (autoCost + manualCost);
-      document.getElementById('unitsLabel').textContent = '販売本数(全体・店舗+社員)';
+      document.getElementById('unitsLabel').textContent = '販売本数(全体・全販路)';
+      document.getElementById('statUnitsSub').textContent = starterCount > 0
+        ? 'うちスターターパス ' + num(starterCount) + '件(3点×' + num(starterCount) + ' = ' + num(starterCount*3) + '本)を含む' : '';
     } else {
       const idx = PRODUCTS.findIndex(p => p.name === view);
       const p = PRODUCTS[idx];
@@ -1178,7 +1185,9 @@
       units = combined; target = p.target; pct = (combined / p.target) * 100;
       revenue = storeRevenue(idx) + empUnits * empPrice + ecUnits * ecPrice + schoolUnits * schoolPrice + fcUnits * fcPrice + manual.revenue;
       profit = revenue - (combined * p.cost + manual.cost);
-      document.getElementById('unitsLabel').textContent = '販売本数(' + p.name + '・店舗+社員)';
+      document.getElementById('unitsLabel').textContent = '販売本数(' + p.name + '・全販路)';
+      document.getElementById('statUnitsSub').textContent = (starterCount > 0 && STARTER_ITEMS.indexOf(idx) >= 0)
+        ? 'うちスターターパス ' + num(starterCount) + '件分(' + num(starterCount) + '本)を含む' : '';
     }
 
     document.getElementById('statUnits').innerHTML = num(units) + '<span class="unit"> / ' + num(target) + '本</span>';
@@ -1732,12 +1741,13 @@
             <span>粗利 <b class="${(revenue-cost)<0?'neg':''}">${yen(revenue-cost)}</b></span>
           </div>
           <div class="channel-edit-row">
-            <div class="channel-edit-field"><label>店舗</label><input type="number" class="ch-store" value="${storeUnits}"></div>
+            <div class="channel-edit-field"><label>店舗${starterUnitsFor(i, pastChannelData.storeMeta.starter) > 0 ? '(パス込)' : ''}</label><input type="number" class="ch-store" value="${storeUnits}"></div>
             <div class="channel-edit-field"><label>社員</label><input type="number" class="ch-emp" value="${emp.units}"></div>
             <div class="channel-edit-field"><label>EC</label><input type="number" class="ch-ec" value="${ec.units}"></div>
             <div class="channel-edit-field"><label>スクール</label><input type="number" class="ch-school" value="${school.units}"></div>
             <div class="channel-edit-field"><label>FC</label><input type="number" class="ch-fc" value="${fc.units}"></div>
           </div>
+          ${starterUnitsFor(i, pastChannelData.storeMeta.starter) > 0 ? `<div class="section-note" style="margin:6px 0 0;">店舗の本数のうち、スターターパス ${num(starterUnitsFor(i, pastChannelData.storeMeta.starter))}本を含みます</div>` : ''}
         `;
         row.querySelector('.ch-store').addEventListener('change', (e) => {
           pastChannelData.storeUnits[i] = Number(e.target.value)||0;
@@ -1771,6 +1781,9 @@
 
     const totalTargetM = PRODUCTS.reduce((s,p)=>s+p.target,0);
     document.getElementById('pastStatUnits').innerHTML = num(totalUnitsM) + '<span class="unit"> / ' + num(totalTargetM) + '本</span>';
+    const pastStarter = (editable && pastChannelData.storeMeta.starter) ? pastChannelData.storeMeta.starter : 0;
+    document.getElementById('pastStatUnitsSub').textContent = pastStarter > 0
+      ? 'うちスターターパス ' + num(pastStarter) + '件(3点×' + num(pastStarter) + ' = ' + num(pastStarter*3) + '本)を含む' : '';
     document.getElementById('pastStatPct').textContent = (totalUnitsM/totalTargetM*100).toFixed(1) + '%';
     document.getElementById('pastStatRevenue').textContent = yen(totalRevenue);
     document.getElementById('pastStatProfit').textContent = yen(totalRevenue-totalCost);
@@ -1966,7 +1979,7 @@
     let csv = '\uFEFF';
     csv += `N.THREE ${cy}年${cm}月度${isLiveMonth ? '(進行中)' : '(確定値)'}\n\n`;
     csv += '商品別内訳(全販路)\n';
-    csv += '商品,店舗本数,社員本数,EC本数,スクール本数,FC本数,合計本数,目標,達成率,売上,粗利\n';
+    csv += '商品,店舗本数(パス除く),スターターパス本数,社員本数,EC本数,スクール本数,FC本数,合計本数,目標,達成率,売上,粗利\n';
 
     let sumUnits=0, sumTarget=0, sumRevenue=0, sumCost=0;
 
@@ -1981,7 +1994,7 @@
         const rev = storeRevenue(i) + empUnits*empPrice + ecUnits*ecPrice + schoolUnits*schoolPrice + fcUnits*fcPrice;
         const cost = combined*p.cost;
         sumUnits+=combined; sumTarget+=p.target; sumRevenue+=rev; sumCost+=cost;
-        csv += `${p.name},${p.units},${empUnits},${ecUnits},${schoolUnits},${fcUnits},${combined},${p.target},${(combined/p.target*100).toFixed(1)}%,${rev},${cost}\n`;
+        csv += `${p.name},${Math.max(0, p.units - starterUnitsFor(i, starterCount))},${starterUnitsFor(i, starterCount)},${empUnits},${ecUnits},${schoolUnits},${fcUnits},${combined},${p.target},${(combined/p.target*100).toFixed(1)}%,${rev},${rev-cost}\n`;
       });
     } else if (isEditablePast){
       PRODUCTS.forEach((p,i)=>{
@@ -1997,15 +2010,15 @@
         const rev = storeRev + emp.units*emp.price + ec.units*ec.price + school.units*school.price + fc.units*fc.price;
         const cost = combined*p.cost;
         sumUnits+=combined; sumTarget+=p.target; sumRevenue+=rev; sumCost+=cost;
-        csv += `${p.name},${storeUnits},${emp.units},${ec.units},${school.units},${fc.units},${combined},${p.target},${(combined/p.target*100).toFixed(1)}%,${rev},${cost}\n`;
+        csv += `${p.name},${Math.max(0, storeUnits - starterUnitsFor(i, pastChannelData.storeMeta.starter))},${starterUnitsFor(i, pastChannelData.storeMeta.starter)},${emp.units},${ec.units},${school.units},${fc.units},${combined},${p.target},${(combined/p.target*100).toFixed(1)}%,${rev},${rev-cost}\n`;
       });
     } else {
       getMonthProductFigures(monthKey).forEach((d,i)=>{
         sumUnits+=d.units; sumTarget+=PRODUCTS[i].target; sumRevenue+=d.revenue; sumCost+=d.cost;
-        csv += `${d.name},,,,,,${d.units},${PRODUCTS[i].target},${(d.units/PRODUCTS[i].target*100).toFixed(1)}%,${d.revenue},${d.cost}\n`;
+        csv += `${d.name},,,,,,,${d.units},${PRODUCTS[i].target},${(d.units/PRODUCTS[i].target*100).toFixed(1)}%,${d.revenue},${d.revenue-d.cost}\n`;
       });
     }
-    csv += `合計,,,,,,${sumUnits},${sumTarget},${(sumUnits/sumTarget*100).toFixed(1)}%,${sumRevenue},${sumRevenue-sumCost}\n\n`;
+    csv += `合計,,,,,,,${sumUnits},${sumTarget},${(sumUnits/sumTarget*100).toFixed(1)}%,${sumRevenue},${sumRevenue-sumCost}\n\n`;
 
     if (isLiveMonth){
       csv += '来店・販売率\n来店数,購入件数,販売率\n';
