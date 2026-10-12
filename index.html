@@ -504,6 +504,24 @@
   let bundleCount = 0;   // 【キャンペーン】美容液＆化粧水 セット購入件数(参考値)
   let visitTotal = 0;    // 来店数合計
   let rawTotal = 0;      // 購入件数合計(CSVの「合計」列。本数ではなく件数ベース)
+  let starterCount = 0;  // N.THREEスターターパスの販売件数(1パス=美容液+化粧水+クリームの3点・本数に含む)
+
+  // スターターパスは3点セットで2,990円(通常価格の合計2,970円との差額+20円/パス)。
+  // 差額は通常価格の比率で3商品に按分し、合計が1パスあたり2,990円ちょうどになるようにする。
+  const STARTER_PASS_PRICE = 2990;
+  const STARTER_ITEMS = [0, 1, 3]; // 美容液, 化粧水, クリーム
+  function starterRevenueAdj(i, count){
+    if (!count || STARTER_ITEMS.indexOf(i) < 0) return 0;
+    const regular = STARTER_ITEMS.reduce((s,idx) => s + PRODUCTS[idx].price, 0);
+    const total = count * (STARTER_PASS_PRICE - regular);
+    let allocated = 0, share = 0;
+    STARTER_ITEMS.forEach((idx, n) => {
+      const s = (n === STARTER_ITEMS.length - 1) ? (total - allocated) : Math.round(total * PRODUCTS[idx].price / regular);
+      if (idx === i) share = s;
+      allocated += s;
+    });
+    return share;
+  }
 
   // 9/1〜9/4は価格改定前(美容液・化粧水=1650円)。この期間の実本数・実売上を固定値として持ち、
   // 9月の月累計本数からこの分を差し引いた残りを990円で計算する(9/5以降の価格改定を正しく反映するため)
@@ -511,12 +529,14 @@
   const SEPT_EARLY_REVENUE = [80050, 52000, 0, 0];
   function storeRevenue(i){
     const p = PRODUCTS[i];
-    const earlyUnits = SEPT_EARLY_UNITS[i];
-    const earlyRevenueTotal = SEPT_EARLY_REVENUE[i];
+    // 9/1〜9/4の旧価格補正は9月だけに適用する(10月以降のライブの月には適用しない)
+    const isSeptember = (MONTH === '2026-09');
+    const earlyUnits = isSeptember ? SEPT_EARLY_UNITS[i] : 0;
+    const earlyRevenueTotal = isSeptember ? SEPT_EARLY_REVENUE[i] : 0;
     const avgEarlyPrice = earlyUnits > 0 ? earlyRevenueTotal / earlyUnits : 0;
     const creditedEarly = Math.min(p.units, earlyUnits); // 実際にアップロードされている本数分だけ、9/1〜9/4の単価を適用
     const remaining = Math.max(0, p.units - earlyUnits);
-    return creditedEarly * avgEarlyPrice + remaining * p.price;
+    return creditedEarly * avgEarlyPrice + remaining * p.price + starterRevenueAdj(i, starterCount);
   }
 
   const COLS = {
@@ -528,6 +548,7 @@
     cleansingFirst: 'クレンジングオイル（初回購入）', cleansingRepeat: 'クレンジングオイル（再購入）',
     wmoistFirst: 'W Moist Lotion（初回購入）', wmoistRepeat: 'W Moist Lotion（再購入）',
     creamFirst: 'Deep Repair Cream（初回購入）', creamRepeat: 'Deep Repair Cream（再購入）',
+    starterPass: 'N.THREEスターターパス',
     total: '合計',
   };
 
@@ -699,7 +720,7 @@
     const [my, mm] = MONTH.split('-').map(Number);
     document.getElementById('asofLine').innerHTML =
       `${my}年${mm}月${TODAY_DAY}日時点・${mm}/1〜${mm}/${TODAY_DAY}累計(月${Math.round(dayProgressPct())}%経過)<span class="demo-badge">実データ(CSV反映)</span>` +
-      `<br>まとめ買い(美容液+化粧水セット): ${num(bundleCount)}件(本数に含む)`;
+      `<br>まとめ買い(美容液+化粧水セット): ${num(bundleCount)}件 ・ スターターパス: ${num(starterCount)}件(いずれも本数に含む)`;
   }
 
   function renderSalesRate(){
@@ -1241,6 +1262,7 @@
       const { data: uploads } = await db.from('n3_daily_uploads').select('*').eq('month', monthKey).order('day', { ascending: false }).limit(1);
       const last = (uploads && uploads[0]) || null;
       const monthUnits = last ? [last.serum_units, last.lotion_units, last.cleansing_units, last.cream_units] : [0,0,0,0];
+      const starter = last ? (last.starter_count||0) : 0;
 
       const { data: empRows } = await db.from('n3_employee_sales').select('*').eq('month', monthKey);
       const { data: ecRows } = await db.from('n3_ec_sales').select('*').eq('month', monthKey);
@@ -1267,6 +1289,7 @@
         } else {
           storeRev = monthUnits[i] * p.price;
         }
+        storeRev += starterRevenueAdj(i, starter);
         const revenue = storeRev + empUnits*empPrice + ecUnits*ecPrice + schoolUnits*schoolPrice + fcUnits*fcPrice;
         const cost = combined * p.cost;
         return { units: combined, revenue, cost };
@@ -1483,6 +1506,7 @@
 
       const last = uploads[0];
       const monthUnits = [last.serum_units, last.lotion_units, last.cleansing_units, last.cream_units];
+      const starter = last.starter_count||0;
 
       const { data: empRows } = await db.from('n3_employee_sales').select('*').eq('month', monthKey);
       const empByProduct = {};
@@ -1532,6 +1556,7 @@
         } else {
           storeRev = monthUnits[i]*p.price;
         }
+        storeRev += starterRevenueAdj(i, starter);
         const revenue = storeRev + empUnits*empPrice + ecUnits*ecPrice + schoolUnits*schoolPrice + fcUnits*fcPrice + manual.revenue;
         const cost = combined * p.cost + manual.cost;
         return { month: monthKey, product: p.name, units: combined, revenue, cost };
@@ -1569,14 +1594,14 @@
   }
 
   async function loadPastChannelData(monthKey){
-    let storeUnits = [0,0,0,0], storeDay = null, storeMeta = { visit:0, raw:0, bundle:0 };
+    let storeUnits = [0,0,0,0], storeDay = null, storeMeta = { visit:0, raw:0, bundle:0, starter:0 };
     try{
       const { data: uploads } = await db.from('n3_daily_uploads').select('*').eq('month', monthKey).order('day', { ascending: false }).limit(1);
       const last = (uploads && uploads[0]) || null;
       if (last){
         storeUnits = [last.serum_units, last.lotion_units, last.cleansing_units, last.cream_units];
         storeDay = last.day;
-        storeMeta = { visit: last.visit_total||0, raw: last.raw_total||0, bundle: last.bundle_count||0 };
+        storeMeta = { visit: last.visit_total||0, raw: last.raw_total||0, bundle: last.bundle_count||0, starter: last.starter_count||0 };
       }
     }catch(e){ console.error('店舗本数の読み込みに失敗しました', e); }
 
@@ -1592,7 +1617,7 @@
   async function savePastStoreUnits(monthKey){
     const day = pastChannelData.storeDay || daysInMonthOf(monthKey); // 元の記録が無ければ月末日扱いで保存
     pastChannelData.storeDay = day;
-    await saveDailyUpload(monthKey, day, pastChannelData.storeUnits, pastChannelData.storeMeta.visit, pastChannelData.storeMeta.raw, pastChannelData.storeMeta.bundle);
+    await saveDailyUpload(monthKey, day, pastChannelData.storeUnits, pastChannelData.storeMeta.visit, pastChannelData.storeMeta.raw, pastChannelData.storeMeta.bundle, pastChannelData.storeMeta.starter);
     await archiveSpecificMonth(monthKey);
     renderPastProductsView();
   }
@@ -1684,6 +1709,7 @@
         } else {
           storeRev = storeUnits * p.price;
         }
+        storeRev += starterRevenueAdj(i, pastChannelData.storeMeta.starter);
         const revenue = storeRev + emp.units*emp.price + ec.units*ec.price + school.units*school.price + fc.units*fc.price;
         const cost = combined * p.cost;
         totalRevenue += revenue; totalCost += cost; totalUnitsM += combined;
@@ -1967,6 +1993,7 @@
           const remaining = Math.max(0, storeUnits - SEPT_EARLY_UNITS[i]);
           storeRev = SEPT_EARLY_REVENUE[i] + remaining * p.price;
         } else { storeRev = storeUnits * p.price; }
+        storeRev += starterRevenueAdj(i, pastChannelData.storeMeta.starter);
         const rev = storeRev + emp.units*emp.price + ec.units*ec.price + school.units*school.price + fc.units*fc.price;
         const cost = combined*p.cost;
         sumUnits+=combined; sumTarget+=p.target; sumRevenue+=rev; sumCost+=cost;
@@ -1982,11 +2009,13 @@
 
     if (isLiveMonth){
       csv += '来店・販売率\n来店数,購入件数,販売率\n';
-      csv += `${visitTotal},${rawTotal},${(visitTotal>0?(rawTotal/visitTotal*100):0).toFixed(2)}%\n\n`;
+      csv += `${visitTotal},${rawTotal},${(visitTotal>0?(rawTotal/visitTotal*100):0).toFixed(2)}%\n`;
+      csv += `スターターパス件数(各商品1本ずつ本数に含む),${starterCount}\n\n`;
     } else if (isEditablePast){
       const visit = pastChannelData.storeMeta.visit||0, raw = pastChannelData.storeMeta.raw||0;
       csv += '来店・販売率\n来店数,購入件数,販売率\n';
-      csv += `${visit},${raw},${(visit>0?(raw/visit*100):0).toFixed(2)}%\n\n`;
+      csv += `${visit},${raw},${(visit>0?(raw/visit*100):0).toFixed(2)}%\n`;
+      csv += `スターターパス件数(各商品1本ずつ本数に含む),${pastChannelData.storeMeta.starter||0}\n\n`;
     }
 
     if (isLiveMonth || (monthKey >= LEDGER_START_MONTH)){
@@ -2028,37 +2057,51 @@
   }
 
   function tryExtractMonthDay(filename){
-    const m = filename.match(/(\d{4})-(\d{2})-(\d{2})/);
-    if (!m) return null;
-    return { month: m[1] + '-' + m[2], day: parseInt(m[3],10) };
+    // ファイル名の日付を拾う。期間指定(例: 2026-10-01___2026-10-12)なら「終了日」をデータの時点とする。
+    // 開始日が月初(1日)でない、または月をまたぐ場合は「月累計ではない期間」として isPartial を立てる。
+    const all = [...filename.matchAll(/(\d{4})-(\d{2})-(\d{2})/g)];
+    if (all.length === 0) return null;
+    const end = all[all.length - 1];
+    const result = { month: end[1] + '-' + end[2], day: parseInt(end[3],10), isPartial: false };
+    if (all.length >= 2){
+      const start = all[0];
+      const sameMonth = (start[1] + '-' + start[2]) === result.month;
+      result.isPartial = !(sameMonth && parseInt(start[3],10) === 1);
+      result.startLabel = parseInt(start[2],10) + '/' + parseInt(start[3],10);
+      result.endLabel = parseInt(end[2],10) + '/' + parseInt(end[3],10);
+    }
+    return result;
   }
 
   function parseCsvRows(rows){
     // CSVの末尾にある「全店合計」行(店舗名が空欄)は除外する。含めると数字が丸ごと2倍になる。
     rows = rows.filter(row => row[COLS.store] && row[COLS.store].trim() !== '');
-    let serum=0, lotion=0, cleansing=0, cream=0, bundle=0, visit=0, raw=0;
+    let serum=0, lotion=0, cleansing=0, cream=0, bundle=0, starter=0, visit=0, raw=0;
     rows.forEach(row => {
       serum += n_(row[COLS.serumRepeat]) + n_(row[COLS.serumFirst]) + n_(row[COLS.serumCampaign]);
       lotion += n_(row[COLS.lotionRepeat]) + n_(row[COLS.lotionFirst]) + n_(row[COLS.lotionCampaign])
               + n_(row[COLS.wmoistFirst]) + n_(row[COLS.wmoistRepeat]);
       bundle += n_(row[COLS.bundleCampaign]);
+      starter += n_(row[COLS.starterPass]);
       cleansing += n_(row[COLS.cleansingFirst]) + n_(row[COLS.cleansingRepeat]);
       cream += n_(row[COLS.creamFirst]) + n_(row[COLS.creamRepeat]);
       visit += n_(row[COLS.visit]);
       raw += n_(row[COLS.total]);
     });
-    // セット購入(美容液＆化粧水)は各1本ずつ加算した「今月累計」として履歴に保存
-    const windowUnits = [serum + bundle, lotion + bundle, cleansing, cream];
-    return { windowUnits, visit, raw, bundle };
+    // セット購入(美容液＆化粧水)は各1本ずつ、N.THREEスターターパス(1パス=美容液+化粧水+クリームの3点)も
+    // 各商品に1本ずつ加算した「今月累計」として履歴に保存する。販売率用のraw(「合計」列)はパス1件=1購入のまま。
+    const windowUnits = [serum + bundle + starter, lotion + bundle + starter, cleansing, cream + starter];
+    return { windowUnits, visit, raw, bundle, starter };
   }
 
   function applyParsedRows(rows, day){
-    const { windowUnits, visit, raw, bundle } = parseCsvRows(rows);
+    const { windowUnits, visit, raw, bundle, starter } = parseCsvRows(rows);
     uploadHistory = uploadHistory.filter(e => e.day !== day);
-    uploadHistory.push({ day, units: windowUnits, visit, raw, bundle });
+    uploadHistory.push({ day, units: windowUnits, visit, raw, bundle, starter });
     uploadHistory.sort((a,b) => a.day - b.day);
 
     bundleCount = bundle;
+    starterCount = starter;
     visitTotal = visit;
     rawTotal = raw;
 
@@ -2069,7 +2112,7 @@
     selectView(currentView);
     renderSalesRate();
     renderLedger();
-    saveDailyUpload(MONTH, day, windowUnits, visit, raw, bundle);
+    saveDailyUpload(MONTH, day, windowUnits, visit, raw, bundle, starter);
     saveMonthlySnapshot();
   }
 
@@ -2084,6 +2127,13 @@
       header: true,
       skipEmptyLines: true,
       complete: async (results) => {
+        if (extracted && extracted.isPartial){
+          const ok = window.confirm(
+            'このファイルは ' + extracted.startLabel + '〜' + extracted.endLabel + ' の期間で、月初からの累計ではありません。\n' +
+            'このまま反映すると、その期間より前の分が含まれず数字が少なくなります。\n\n' +
+            '「月初〜今日」の期間でダウンロードし直すのがおすすめです。このまま反映しますか?');
+          if (!ok){ status.textContent = 'キャンセルしました(月初からの期間でダウンロードし直してください)'; return; }
+        }
         if (extracted && extracted.month !== MONTH){
           // 違う月のCSV(レポートの1日遅れなどで、前月分を後から修正したい場合)
           const isKnownMonth = PERIOD_MONTHS.some(m => m.key === extracted.month);
@@ -2091,8 +2141,8 @@
             status.textContent = '対応していない月のファイルです: ' + file.name;
             return;
           }
-          const { windowUnits, visit, raw, bundle } = parseCsvRows(results.data);
-          await saveDailyUpload(extracted.month, extracted.day, windowUnits, visit, raw, bundle);
+          const { windowUnits, visit, raw, bundle, starter } = parseCsvRows(results.data);
+          await saveDailyUpload(extracted.month, extracted.day, windowUnits, visit, raw, bundle, starter);
           const ok = await archiveSpecificMonth(extracted.month);
           if (ok && VIEW_MONTH === extracted.month) renderPastProductsView();
           status.textContent = ok
@@ -2114,13 +2164,19 @@
   });
 
   // ---- Persistence(Supabase) ----
-  async function saveDailyUpload(monthKey, day, units, visit, raw, bundle){
+  async function saveDailyUpload(monthKey, day, units, visit, raw, bundle, starter){
+    const row = {
+      month: monthKey, day,
+      serum_units: units[0], lotion_units: units[1], cleansing_units: units[2], cream_units: units[3],
+      bundle_count: bundle, visit_total: visit, raw_total: raw
+    };
     try{
-      const { error } = await db.from('n3_daily_uploads').upsert({
-        month: monthKey, day,
-        serum_units: units[0], lotion_units: units[1], cleansing_units: units[2], cream_units: units[3],
-        bundle_count: bundle, visit_total: visit, raw_total: raw
-      }, { onConflict: 'month,day' });
+      let { error } = await db.from('n3_daily_uploads').upsert({ ...row, starter_count: starter||0 }, { onConflict: 'month,day' });
+      if (error && String(error.message||error).indexOf('starter_count') >= 0){
+        // starter_count列がまだ無い場合でも、本数・来店数の保存は止めない(SQLを実行するまでパスの売上差額だけ反映されない)
+        console.warn('starter_count列が未作成です。SQLを実行してください。本数のみ保存します');
+        ({ error } = await db.from('n3_daily_uploads').upsert(row, { onConflict: 'month,day' }));
+      }
       if (error) console.error('日次アップロードの保存に失敗しました', error);
     }catch(e){ console.error('日次アップロードの保存に失敗しました', e); }
   }
@@ -2132,11 +2188,11 @@
       uploadHistory = (data||[]).map(row => ({
         day: row.day,
         units: [row.serum_units, row.lotion_units, row.cleansing_units, row.cream_units],
-        visit: row.visit_total, raw: row.raw_total, bundle: row.bundle_count
+        visit: row.visit_total, raw: row.raw_total, bundle: row.bundle_count, starter: row.starter_count||0
       }));
       if (uploadHistory.length > 0){
         const last = uploadHistory[uploadHistory.length-1];
-        TODAY_DAY = last.day; bundleCount = last.bundle; visitTotal = last.visit; rawTotal = last.raw;
+        TODAY_DAY = last.day; bundleCount = last.bundle; starterCount = last.starter||0; visitTotal = last.visit; rawTotal = last.raw;
       }
     }catch(e){ console.error('履歴の読み込みに失敗しました', e); }
   }
@@ -2194,7 +2250,7 @@
     }catch(e){ console.error('リセットに失敗しました', e); }
 
     PRODUCTS.forEach(p => p.units = 0);
-    bundleCount = 0; visitTotal = 0; rawTotal = 0; TODAY_DAY = 1;
+    bundleCount = 0; starterCount = 0; visitTotal = 0; rawTotal = 0; TODAY_DAY = 1;
     uploadHistory = [];
     employeeData.forEach(e => e.units = 0);
     ecData.forEach(e => e.units = 0);
