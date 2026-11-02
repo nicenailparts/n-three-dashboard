@@ -385,6 +385,21 @@
         </div>
         <div class="section-note" id="pastProductsNote" style="margin:-8px 2px 10px;">確定値(過去のCSVより)</div>
 
+        <div id="pastInputControls" class="hidden" style="margin-bottom:16px;">
+          <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+            <label class="csv-btn" style="cursor:pointer;">
+              <input type="file" id="pastCsvUpload" accept=".csv" style="display:none;">
+              CSVをアップロード(この月)
+            </label>
+            <label class="csv-btn" style="cursor:pointer;">
+              <input type="file" id="pastEmpUpload" accept=".csv" style="display:none;">
+              社割購入報告CSV(この月)
+            </label>
+            <button class="csv-btn" id="pastResetBtn" style="color:var(--neg); border-color:var(--neg);">この月の店舗・社員を削除して入れ直す</button>
+          </div>
+          <div id="pastUploadStatus" style="font-size:12px; color:var(--ink-soft); margin-top:8px; line-height:1.5;"></div>
+        </div>
+
         <div class="stat-grid">
           <div class="stat-card">
             <div class="stat-label">販売本数(全体)</div>
@@ -1053,6 +1068,7 @@
   document.getElementById('employeeUpload').addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    e.target.value = '';
     const status = document.getElementById('employeeUploadStatus');
     status.textContent = '読み込み中…';
     Papa.parse(file, {
@@ -1623,12 +1639,23 @@
     pastChannelData = { storeUnits, storeDay, storeMeta, employee, ec, school, fc };
   }
 
+  function monthLabelOf(key){ const m = PERIOD_MONTHS.find(x => x.key === key); return m ? m.label : key; }
+
+  // 過去月の画面・収支タブ・累計利益を、保存済みのデータから最新の状態に更新し直す
+  async function refreshPastMonthViews(monthKey){
+    if (VIEW_MONTH !== monthKey){ renderLifetimeProfit(); return; }
+    await loadPastChannelData(monthKey);
+    viewedMonthAuto = await getMonthAutoFigures(monthKey);
+    renderPastProductsView();
+    renderLedger(); // 内部で累計利益・商品別の表示も更新される
+  }
+
   async function savePastStoreUnits(monthKey){
     const day = pastChannelData.storeDay || daysInMonthOf(monthKey); // 元の記録が無ければ月末日扱いで保存
     pastChannelData.storeDay = day;
     await saveDailyUpload(monthKey, day, pastChannelData.storeUnits, pastChannelData.storeMeta.visit, pastChannelData.storeMeta.raw, pastChannelData.storeMeta.bundle, pastChannelData.storeMeta.starter);
     await archiveSpecificMonth(monthKey);
-    renderPastProductsView();
+    await refreshPastMonthViews(monthKey);
   }
 
   async function savePastChannelItem(table, monthKey, idx, item){
@@ -1636,7 +1663,77 @@
       await db.from(table).upsert({ month: monthKey, product: PRODUCTS[idx].name, price: item.price, units: item.units }, { onConflict: 'month,product' });
     }catch(e){ console.error(table+'の保存に失敗しました', e); }
     await archiveSpecificMonth(monthKey);
-    renderPastProductsView();
+    await refreshPastMonthViews(monthKey);
+  }
+
+  // 店舗別CSV(月累計)を、指定した月のデータとして反映する(今の月と同じ「CSVを入れる」方式)
+  async function applyStoreCsvToMonth(monthKey, day, rows, statusEl, fileName){
+    const label = monthLabelOf(monthKey);
+    const { windowUnits, visit, raw, bundle, starter } = parseCsvRows(rows);
+    try{
+      const { data: existing } = await db.from('n3_daily_uploads').select('day').eq('month', monthKey).order('day', { ascending: false }).limit(1);
+      const lastDay = (existing && existing[0]) ? existing[0].day : 0;
+      if (lastDay > day){
+        statusEl.textContent = label + 'には' + lastDay + '日分までのデータが既にあり、' + day + '日分のこのファイルでは置き換わらないため反映しませんでした。入れ直す場合は、先に「この月の店舗・社員を削除して入れ直す」を押してください';
+        return false;
+      }
+    }catch(e){ console.error('既存データの確認に失敗しました', e); }
+    const saved = await saveDailyUpload(monthKey, day, windowUnits, visit, raw, bundle, starter);
+    if (!saved){ statusEl.textContent = '保存に失敗しました。もう一度お試しください(' + fileName + ')'; return false; }
+    const ok = await archiveSpecificMonth(monthKey);
+    if (!ok){ statusEl.textContent = label + 'の確定値の再計算に失敗しました。もう一度お試しください'; return false; }
+    await refreshPastMonthViews(monthKey);
+    statusEl.textContent = label + '分として反映しました: ' + fileName + (starter > 0 ? '(スターターパス' + starter + '件を含む)' : '');
+    return true;
+  }
+
+  function parseJpDateMonth(s){
+    const m = String(s || '').match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+    return m ? (m[1] + '-' + String(m[2]).padStart(2, '0')) : null;
+  }
+
+  // 社割購入報告CSVを、指定した月の社員販売として反映する(その月以外の日付の行は除外)
+  async function applyEmployeeCsvToMonth(monthKey, allRows, statusEl, fileName){
+    const label = monthLabelOf(monthKey);
+    const body = allRows.slice(1).filter(r => r[3] && String(r[3]).trim() !== '');
+    let excluded = 0;
+    const kept = body.filter(r => {
+      const ym = parseJpDateMonth(r[0]);
+      if (ym && ym !== monthKey){ excluded++; return false; }
+      return true;
+    });
+    if (kept.length === 0){
+      statusEl.textContent = label + 'の社割購入データが見つかりませんでした' + (excluded ? '(他の月の' + excluded + '件のみ)' : '') + '。反映しませんでした';
+      return false;
+    }
+    const sums = [0,0,0,0];
+    kept.forEach(r => { sums[0] += n_(r[4]); sums[1] += n_(r[5]); sums[2] += n_(r[6]); sums[3] += n_(r[7]); });
+    const rows = PRODUCTS.map((p,i) => ({
+      month: monthKey, product: p.name,
+      price: (pastChannelData && pastChannelData.employee[i] && pastChannelData.employee[i].price) || 770,
+      units: sums[i]
+    }));
+    const { error } = await db.from('n3_employee_sales').upsert(rows, { onConflict: 'month,product' });
+    if (error){ console.error(error); statusEl.textContent = '保存に失敗しました。もう一度お試しください'; return false; }
+    const ok = await archiveSpecificMonth(monthKey);
+    if (!ok){ statusEl.textContent = label + 'の確定値の再計算に失敗しました。もう一度お試しください'; return false; }
+    await refreshPastMonthViews(monthKey);
+    statusEl.textContent = label + '分の社員販売として反映しました: ' + kept.length + '件(' + fileName + ')' + (excluded ? ' ※他の月の' + excluded + '件は除外' : '');
+    return true;
+  }
+
+  // 過去月の「CSVで入れる項目」(店舗・社員)を一度削除して、入れ直せる状態にする。EC・スクール・FC・収支の項目は残す
+  async function resetPastMonthCsvData(monthKey, statusEl){
+    const label = monthLabelOf(monthKey);
+    const tables = ['n3_daily_uploads', 'n3_employee_sales', 'n3_monthly_product_summary'];
+    for (const t of tables){
+      const { error } = await db.from(t).delete().eq('month', monthKey);
+      if (error){ console.error(t, error); statusEl.textContent = '削除に失敗しました。もう一度お試しください'; return false; }
+    }
+    delete monthlyProductSummary[monthKey];
+    await refreshPastMonthViews(monthKey);
+    statusEl.textContent = label + 'の店舗・社員のデータを削除しました。この月のCSVをアップロードして入れ直してください';
+    return true;
   }
 
   function appendHistoryRow(listEl, name, units, revenue, cost, target){
@@ -1695,6 +1792,8 @@
     let totalRevenue = 0, totalCost = 0, totalUnitsM = 0;
 
     const editable = VIEW_MONTH >= LEDGER_START_MONTH && pastChannelData;
+    const ctl = document.getElementById('pastInputControls');
+    if (ctl) ctl.classList.toggle('hidden', !editable);
     document.getElementById('pastProductsNote').textContent = editable ? '本数を直接修正できます' : '確定値(過去のCSVより・本数は編集できません)';
 
     if (!editable){
@@ -1800,6 +1899,8 @@
   }
 
   async function applyViewMonth(){
+    const pastStatusEl = document.getElementById('pastUploadStatus');
+    if (pastStatusEl) pastStatusEl.textContent = '';
     const isLive = VIEW_MONTH === MONTH;
     const isEditableLedger = VIEW_MONTH >= LEDGER_START_MONTH;
     const info = PERIOD_MONTHS.find(m => m.key === VIEW_MONTH);
@@ -2073,7 +2174,13 @@
     // ファイル名の日付を拾う。期間指定(例: 2026-10-01___2026-10-12)なら「終了日」をデータの時点とする。
     // 開始日が月初(1日)でない、または月をまたぐ場合は「月累計ではない期間」として isPartial を立てる。
     const all = [...filename.matchAll(/(\d{4})-(\d{2})-(\d{2})/g)];
-    if (all.length === 0) return null;
+    if (all.length === 0){
+      // 「2026-10」のように月だけのファイル名(月間レポート)。その月の最終日(今月なら今日)のデータとして扱う
+      const mo = filename.match(/(\d{4})-(\d{2})(?!\d)/);
+      if (!mo) return null;
+      const month = mo[1] + '-' + mo[2];
+      return { month, day: month === MONTH ? TODAY_DAY : daysInMonthOf(month), isPartial: false, monthOnly: true };
+    }
     const end = all[all.length - 1];
     const result = { month: end[1] + '-' + end[2], day: parseInt(end[3],10), isPartial: false };
     if (all.length >= 2){
@@ -2132,6 +2239,7 @@
   document.getElementById('csvUpload').addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    e.target.value = ''; // 同じファイルをもう一度選んでも反応するようにする
     const status = document.getElementById('uploadStatus');
     status.textContent = '読み込み中…';
     const extracted = tryExtractMonthDay(file.name);
@@ -2154,13 +2262,7 @@
             status.textContent = '対応していない月のファイルです: ' + file.name;
             return;
           }
-          const { windowUnits, visit, raw, bundle, starter } = parseCsvRows(results.data);
-          await saveDailyUpload(extracted.month, extracted.day, windowUnits, visit, raw, bundle, starter);
-          const ok = await archiveSpecificMonth(extracted.month);
-          if (ok && VIEW_MONTH === extracted.month) renderPastProductsView();
-          status.textContent = ok
-            ? (extracted.month + 'の確定値を修正しました: ' + file.name)
-            : (extracted.month + 'の修正に失敗しました');
+          await applyStoreCsvToMonth(extracted.month, extracted.day, results.data, status, file.name);
           return;
         }
         const day = (extracted ? extracted.day : null) || TODAY_DAY;
@@ -2190,8 +2292,9 @@
         console.warn('starter_count列が未作成です。SQLを実行してください。本数のみ保存します');
         ({ error } = await db.from('n3_daily_uploads').upsert(row, { onConflict: 'month,day' }));
       }
-      if (error) console.error('日次アップロードの保存に失敗しました', error);
-    }catch(e){ console.error('日次アップロードの保存に失敗しました', e); }
+      if (error){ console.error('日次アップロードの保存に失敗しました', error); return false; }
+      return true;
+    }catch(e){ console.error('日次アップロードの保存に失敗しました', e); return false; }
   }
 
   async function loadHistory(){
@@ -2287,6 +2390,61 @@
     document.getElementById('monthlyCompareNote').textContent = '';
     document.getElementById('uploadStatus').textContent = '';
     document.getElementById('employeeUploadStatus').textContent = '';
+  });
+
+  // ---- 過去月(9月以降)のCSV入れ直し用コントロール ----
+  document.getElementById('pastCsvUpload').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    e.target.value = ''; // 同じファイルをもう一度選んでも反応するようにする
+    const status = document.getElementById('pastUploadStatus');
+    const monthKey = VIEW_MONTH;
+    if (monthKey === MONTH || monthKey < LEDGER_START_MONTH) return;
+    status.textContent = '読み込み中…';
+    const extracted = tryExtractMonthDay(file.name);
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: async (results) => {
+        if (extracted && extracted.month !== monthKey){
+          if (!window.confirm('このファイルは ' + extracted.month + ' のデータのようです。\n' + monthLabelOf(monthKey) + ' に反映してよろしいですか?')){
+            status.textContent = 'キャンセルしました'; return;
+          }
+        } else if (extracted && extracted.isPartial){
+          if (!window.confirm('このファイルは ' + extracted.startLabel + '〜' + extracted.endLabel + ' の期間で、月初からの累計ではありません。\nこのまま反映しますか?')){
+            status.textContent = 'キャンセルしました(月初からの期間でダウンロードし直してください)'; return;
+          }
+        }
+        const day = (extracted && extracted.month === monthKey) ? extracted.day : daysInMonthOf(monthKey);
+        await applyStoreCsvToMonth(monthKey, day, results.data, status, file.name);
+      },
+      error: (err) => { status.textContent = '読み込みに失敗しました'; console.error(err); }
+    });
+  });
+
+  document.getElementById('pastEmpUpload').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    e.target.value = '';
+    const status = document.getElementById('pastUploadStatus');
+    const monthKey = VIEW_MONTH;
+    if (monthKey === MONTH || monthKey < LEDGER_START_MONTH) return;
+    status.textContent = '読み込み中…';
+    Papa.parse(file, {
+      header: false,
+      skipEmptyLines: true,
+      encoding: 'Shift_JIS',
+      complete: async (results) => { await applyEmployeeCsvToMonth(monthKey, results.data, status, file.name); },
+      error: (err) => { status.textContent = '読み込みに失敗しました'; console.error(err); }
+    });
+  });
+
+  document.getElementById('pastResetBtn').addEventListener('click', async () => {
+    const monthKey = VIEW_MONTH;
+    if (monthKey === MONTH || monthKey < LEDGER_START_MONTH) return;
+    const status = document.getElementById('pastUploadStatus');
+    if (!window.confirm(monthLabelOf(monthKey) + 'の「店舗(CSV)」と「社員販売」のデータを削除します。\n\nEC・スクール・FCの入力や、収支の項目は消えません。\n削除したあと、この月のCSVをアップロードして入れ直してください。\n\nよろしいですか?')) return;
+    await resetPastMonthCsvData(monthKey, status);
   });
 
   async function init(){
